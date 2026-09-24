@@ -1,100 +1,145 @@
-# Bonsai 2 (27B PQ2_0) · Local Apple Silicon Inference Stack
+# bonsai-2-local
 
 <p align="center">
-  <img src="./assets/tree.svg" alt="Bonsai 2" width="110"/>
+  <img src="./assets/tree.svg" alt="Bonsai 2" width="96" />
 </p>
 
 <p align="center">
-  <strong>Fast, minimal, verified local inference for PrismML's Ternary Bonsai 2 (27B) on Apple Silicon with Metal acceleration.</strong>
+  Local Apple Silicon inference runtime for Ternary Bonsai 2 27B with Metal acceleration.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Model-Ternary--Bonsai--2--27B-304f38?style=flat-square" alt="Model"/>
-  <img src="https://img.shields.io/badge/Quant-PQ2__0%20(2.13%20bpw)-577551?style=flat-square" alt="Quant"/>
-  <img src="https://img.shields.io/badge/Hardware-Apple%20Silicon%20(Metal)-91a780?style=flat-square" alt="Hardware"/>
-  <img src="https://img.shields.io/badge/Speed-~22.7%20tok%2Fs-success?style=flat-square" alt="Speed"/>
-  <img src="https://img.shields.io/badge/Context-32%2C768%20tokens-blue?style=flat-square" alt="Context"/>
-  <img src="https://img.shields.io/badge/API-OpenAI%20Compatible-informational?style=flat-square" alt="API"/>
+  <img src="https://img.shields.io/badge/model-Ternary--Bonsai--2--27B-34493e?style=flat-square" alt="Model" />
+  <img src="https://img.shields.io/badge/quantization-PQ2__0%20(2.13%20bpw)-495e54?style=flat-square" alt="Quantization" />
+  <img src="https://img.shields.io/badge/runtime-PrismML%20llama.cpp-2f3b35?style=flat-square" alt="Runtime" />
+  <img src="https://img.shields.io/badge/backend-Apple%20Metal-3c4a42?style=flat-square" alt="Backend" />
+  <img src="https://img.shields.io/badge/context-32%2C768%20tokens-4f5f56?style=flat-square" alt="Context" />
+  <img src="https://img.shields.io/badge/speed-22.7%20tok%2Fs-34493e?style=flat-square" alt="Speed" />
 </p>
 
 ---
 
-## ⚡ Highlights
+## Overview
 
-- **Native Metal GPU Offload:** 100% layer offload on Apple Silicon via PrismML's compatible `llama.cpp` runtime (`prism-b10709-9a9394a`).
-- **Correct Hadamard Transform:** Stock `llama.cpp`, Ollama, and generic GGUF loaders fail on `PQ2_0` activation transformations. This stack pins the exact required runtime for coherent, high-speed reasoning.
-- **OpenAI-Compatible Local API:** Direct endpoint at `http://127.0.0.1:8080/v1` ready for agents, tools, and extensions.
-- **Clean Minimal Web UI:** Built with Vite + vanilla JS, featuring real-time SSE streaming, live `tok/s` meter, token breakdown, context usage tracking, and 1-click continuation.
-- **100% Reproducible:** One-command automated setup script. Zero checked-in model binaries or multi-gigabyte files.
+This repository sets up a self-contained local inference stack for `prism-ml/Ternary-Bonsai-2-27B` using the `PQ2_0` quantization format on Apple Silicon.
+
+It provides:
+- A local `llama-server` process with 100% Metal GPU layer offload.
+- An OpenAI-compatible HTTP API on `http://127.0.0.1:8080/v1`.
+- A browser-based chat frontend with real-time token metrics.
+- Reproducible scripts to download, verify, start, stop, and share the model.
+
+```
+┌────────────────┐     HTTP / SSE      ┌──────────────────────────┐
+│  Client / Agent │ ──────────────────> │   llama-server (:8080)   │
+│   (cURL, etc.)  │ <────────────────── │  Metal GPU, 32k context  │
+└────────────────┘                     └─────────────┬────────────┘
+                                                     │
+┌────────────────┐     Vite proxy                    │
+│  Browser Chat   │ ──────────────────> localhost:5173
+│  (SSE metrics)  │
+└────────────────┘
+```
 
 ---
 
-## 📊 Measured Benchmarks (M3 Max 36 GB)
+## Why standard llama.cpp fails
 
-| Metric | Result | Notes |
+Bonsai 2 relies on an activation transform (a randomized Hadamard transform) coupled with ternary quantization (`PQ2_0`, 2.13 bits per weight).
+
+Upstream `llama.cpp`, Ollama, and generic GGUF runners read the file metadata and allocate memory without throwing an error. Because they lack the Hadamard transform kernel, the forward pass produces corrupted tokens, repetitive loops, or symbol soup.
+
+This setup locks to PrismML's official ARM64 binary build (`prism-b10709-9a9394a`), which implements the required activation kernels for Apple Metal.
+
+---
+
+## Verified benchmarks
+
+Measurements taken on an Apple M3 Max with 36 GB unified memory running macOS Sonoma:
+
+| Parameter | Measurement | Notes |
 | :--- | :--- | :--- |
-| **Generation Speed (Decode)** | **22.4 – 23.1 tok/s** | Sustained average ~22.7 tok/s |
-| **Prompt Processing (Prefill)** | **~160 tok/s** | Measured via `llama-bench` (p=512) |
-| **Context Window** | **32,768 tokens** | Configured via `--ctx-size 32768` |
-| **Model Size on Disk** | **6.71 GiB** (7,206,168,928 bytes) | 2.13 bpw ternary quantization |
-| **Memory Footprint** | **~8.2 GiB** RAM total | Minimal unified memory footprint |
-| **Long Generation Test** | **3,000 tokens in 133.5s** | Verified continuous generation on localhost |
+| Decode throughput | 22.4 to 23.1 tok/s | Sustained average 22.7 tok/s |
+| Prefill throughput | ~160 tok/s | Evaluated at 512 prompt tokens |
+| Context window | 32,768 tokens | Set via `--ctx-size 32768` |
+| Weight size on disk | 6.71 GiB | 7,206,168,928 bytes |
+| Total RAM footprint | ~8.2 GiB | Model weights plus 32k context KV cache |
+| Continuous generation | 3,000 tokens in 133.5s | Completed on localhost with zero drops |
 
 ---
 
-## 🚀 Quickstart
+## Quick start
 
-### 1. Clone & Set Up
+### 1. Setup
+
+Clone the repository and run the setup script:
+
 ```bash
 git clone https://github.com/elix1er/bonsai-2-local.git
 cd bonsai-2-local
 ./setup.sh
 ```
-`./setup.sh` automatically:
-1. Downloads the official ARM64 Prism compatible `llama.cpp` binary.
-2. Clears Gatekeeper quarantine & applies ad-hoc codesign.
-3. Fast-downloads `Ternary-Bonsai-2-27B-PQ2_0.gguf` using 8 parallel range workers with SHA-256 integrity verification (`3907dc16...`).
-4. Installs the minimal frontend dependencies.
 
-### 2. Start the Inference Server
+`setup.sh` handles four steps:
+1. Downloads the PrismML `llama.cpp` macOS ARM64 binary archive.
+2. Clears Gatekeeper quarantine attributes and applies an ad-hoc code signature.
+3. Downloads `Ternary-Bonsai-2-27B-PQ2_0.gguf` from Hugging Face using 8 parallel chunk workers, then verifies the SHA-256 checksum.
+4. Installs web interface dependencies and builds the production assets.
+
+### 2. Start inference server
+
 ```bash
 ./start.sh
 ```
-Starts `llama-server` in the background with full Metal offload, 32k context, Flash Attention, and FP16 KV cache. Health check listens at `http://127.0.0.1:8080/health`.
 
-### 3. Launch the Web UI
+The script starts `llama-server` in the background, writes its process ID to `server.pid`, and checks `http://127.0.0.1:8080/health` until ready. Logs stream to `logs/server.log`.
+
+Server flags used:
+- `--ctx-size 32768`
+- `--n-gpu-layers 999`
+- `--flash-attn on`
+- `--cache-type-k f16 --cache-type-v f16`
+- `--cache-ram 0`
+- `--batch-size 2048 --ubatch-size 512`
+
+### 3. Open web chat (optional)
+
 ```bash
 ./start-web.sh
 ```
-Open **`http://127.0.0.1:5173`** in your browser.
+
+Visit `http://127.0.0.1:5173` in your browser.
 
 ---
 
-## 🕹️ Control Scripts
+## Service control
 
-| Script | Purpose |
+| Script | Action |
 | :--- | :--- |
-| `./setup.sh` | One-command download of runtime, model weights, and dependencies |
-| `./start.sh` | Launches the local model server in the background (PID saved to `server.pid`) |
-| `./stop.sh` | Gracefully terminates the model server |
-| `./start-web.sh` | Starts the Vite web UI dev server on `127.0.0.1:5173` |
+| `./setup.sh` | Downloads runtime, fetches model weights, verifies hash, installs web packages |
+| `./start.sh` | Launches `llama-server` in background with Metal acceleration |
+| `./stop.sh` | Stops the running `llama-server` process |
+| `./start-web.sh` | Starts the Vite web UI dev server on port 5173 |
 | `./stop-web.sh` | Stops the web UI server |
-| `./share.sh` | Spawns a temporary public Cloudflare Tunnel (`*.trycloudflare.com`) |
-| `./stop-share.sh` | Closes the Cloudflare tunnel |
+| `./share.sh` | Opens a temporary public Cloudflare Tunnel to port 5173 |
+| `./stop-share.sh` | Terminates the Cloudflare tunnel |
 
 ---
 
-## 🔌 OpenAI-Compatible API Usage
+## API reference
 
-The inference server exposes standard OpenAI endpoints at `http://127.0.0.1:8080/v1`.
+The server exposes standard OpenAI endpoints at `http://127.0.0.1:8080/v1`.
 
-### Direct Generation (Thinking OFF)
+### Standard completion
+
 ```bash
 curl -N http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "bonsai-2-27b",
-    "messages": [{"role": "user", "content": "Explain why the sky is blue in two sentences."}],
+    "messages": [
+      {"role": "user", "content": "Explain why the sky is blue in two sentences."}
+    ],
     "stream": true,
     "max_tokens": 4096,
     "reasoning_effort": "none",
@@ -102,13 +147,18 @@ curl -N http://127.0.0.1:8080/v1/chat/completions \
   }'
 ```
 
-### Deep Reasoning (Thinking ON)
+### Extended reasoning mode
+
+Bonsai 2 supports internal chain-of-thought thinking tokens:
+
 ```bash
 curl -N http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "bonsai-2-27b",
-    "messages": [{"role": "user", "content": "How many r'\''s are in strawberry?"}],
+    "messages": [
+      {"role": "user", "content": "How many r characters are in strawberry?"}
+    ],
     "stream": true,
     "max_tokens": 8192,
     "reasoning_effort": "medium",
@@ -118,48 +168,56 @@ curl -N http://127.0.0.1:8080/v1/chat/completions \
 
 ---
 
-## 💡 Web UI Features
+## Web interface
 
-- **Universal Real-Time Streaming:** Streams token-by-token over both local loopback and Cloudflare Tunnels using SSE.
-- **Live Metrics Dashboard:**
-  - Real-time generation speed (`22.8 tok/s`).
-  - Output token count and thinking breakdown (`144 tok (42 think)`).
-  - Context window usage (`1,460 / 32,768 ctx (4%)`).
-  - Server finish reason (`stop`, `length`).
-- **1-Click Continuation:**
-  If a response hits the max output token limit, a **`Continue generating ↳`** button appears directly beneath the message. Clicking it resumes generation seamlessly from the cutoff point without polluting prompt history.
-- **Network Note (Cloudflare Tunnel vs Localhost):**
-  Free quick tunnels (`*.trycloudflare.com`) enforce an unbuffered HTTP stream timeout around ~60–65s (~1,440 tokens at 22.7 tok/s). On `localhost`, streams run completely uninterrupted (verified past 3,000+ tokens). The continue button seamlessly bridges remote timeouts.
+The web client in `web/` provides a focused chat surface:
+- Live generation speed gauge (`tok/s`).
+- Token accounting broken down into reasoning and final response tokens.
+- Context window utilization meter showing used tokens against the 32,768 ceiling.
+- One-click continuation button if output hits the configured token limit.
+
+### Cloudflare tunnel notes
+
+When testing via `share.sh` (`*.trycloudflare.com` quick tunnels), Cloudflare drops idle or unbuffered HTTP connections after roughly 60 seconds. At 22.7 tok/s, that translates to approximately 1,440 generated tokens per burst.
+
+On `localhost`, requests never experience this timeout. The web client handles remote drops cleanly: if the server signals `finish_reason: length` or drops mid-stream, a **Continue generating** button appears so you can resume the response without re-sending earlier turns.
 
 ---
 
-## 📁 Repository Structure
+## Repository layout
 
 ```
-├── .gitignore               # Strict ignore rules (excludes models, binaries, logs)
-├── README.md                # This documentation
-├── setup.sh                 # Master reproducible setup script
-├── start.sh                 # Background llama-server launcher
-├── stop.sh                  # Safe llama-server shutdown
-├── start-web.sh             # Vite chat frontend launcher
-├── stop-web.sh              # Web frontend shutdown
-├── share.sh                 # Cloudflare tunnel sharing helper
-├── stop-share.sh            # Tunnel teardown
+├── .gitignore               # Excludes weights, binaries, node_modules, and logs
+├── README.md                # Documentation and operational reference
+├── setup.sh                 # Reproducible environment installer
+├── start.sh                 # Background llama-server runner
+├── stop.sh                  # Graceful server shutdown
+├── start-web.sh             # Vite chat frontend runner
+├── stop-web.sh              # Chat frontend shutdown
+├── share.sh                 # Cloudflare tunnel helper
+├── stop-share.sh            # Tunnel shutdown
+├── assets/
+│   └── tree.svg             # Bonsai vector logo
 ├── scripts/
-│   ├── download_runtime.sh  # Official PrismML ARM64 llama.cpp binary downloader
-│   └── download_model.py   # Multi-threaded parallel model downloader with SHA-256
+│   ├── download_runtime.sh  # Fetches PrismML ARM64 binary release
+│   └── download_model.py    # Multi-threaded range downloader with hash check
 └── web/
-    ├── index.html           # Single-page UI entrypoint
-    ├── package.json         # Minimal dependencies (marked, dompurify, vite)
-    ├── vite.config.js       # Reverse proxy configuration
-    ├── src.js               # Frontend chat logic, SSE streaming, live metrics
-    └── style.css            # Minimalist bonsai aesthetic styles
+    ├── index.html           # Minimal HTML shell
+    ├── package.json         # Frontend dependencies (marked, dompurify, vite)
+    ├── vite.config.js       # Local proxy with extended socket timeout
+    ├── src.js               # Chat client, SSE parser, and metrics renderer
+    └── style.css            # Layout and theme styles
 ```
 
 ---
 
-## 📜 Provenance & Licenses
+## Model verification
 
-- **Model:** [`prism-ml/Ternary-Bonsai-2-27B-gguf`](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf) (Revision `6ed5e12b`)
-- **Runtime:** [PrismML llama.cpp release](https://github.com/PrismML-Eng/llama.cpp/releases/tag/prism-b10709-9a9394a) (`prism-b10709-9a9394a`)
-- **SHA-256:** `3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1`
+| Attribute | Specification |
+| :--- | :--- |
+| Repository | [`prism-ml/Ternary-Bonsai-2-27B-gguf`](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf) |
+| Git revision | `6ed5e12bf84b7a63069882c91dd9e9218647d17b` |
+| File | `Ternary-Bonsai-2-27B-PQ2_0.gguf` |
+| Size | 7,206,168,928 bytes (6.71 GiB) |
+| SHA-256 | `3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1` |
+| Runtime release | [`prism-b10709-9a9394a`](https://github.com/PrismML-Eng/llama.cpp/releases/tag/prism-b10709-9a9394a) |
