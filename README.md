@@ -1,7 +1,7 @@
 # Bonsai 2 (27B PQ2_0) · Local Apple Silicon Inference Stack
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/elix1er/bonsai-2-local/main/web/public/tree.svg" alt="Bonsai 2" width="90" onerror="this.style.display='none'"/>
+  <img src="./assets/tree.svg" alt="Bonsai 2" width="110"/>
 </p>
 
 <p align="center">
