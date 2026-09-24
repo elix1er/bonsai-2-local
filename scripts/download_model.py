@@ -83,7 +83,7 @@ def main():
                         pos += n
                         progress[idx] += n
                 return
-            except Exception as e:
+            except Exception:
                 if attempt == 4:
                     raise
                 time.sleep(2)
