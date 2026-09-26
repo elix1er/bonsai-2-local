@@ -15,7 +15,9 @@ if [ -x "$DEST/llama-server" ]; then
 fi
 
 TMP="$(mktemp -t bonsai_runtime.XXXXXX)"
-trap 'rm -f "$TMP"' EXIT INT TERM
+trap 'rm -f "$TMP"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 echo "Downloading $URL..."
 curl -fL --progress-bar "$URL" -o "$TMP"
