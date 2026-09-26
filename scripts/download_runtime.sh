@@ -14,12 +14,15 @@ if [ -x "$DEST/llama-server" ]; then
     exit 0
 fi
 
-mkdir -p "$DEST"
 TMP="$(mktemp -t bonsai_runtime.XXXXXX)"
+trap 'rm -f "$TMP"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 echo "Downloading $URL..."
 curl -fL --progress-bar "$URL" -o "$TMP"
 
+mkdir -p "$DEST"
 echo "Extracting runtime to $DEST..."
 tar -xzf "$TMP" -C "$DEST" --strip-components=1 2>/dev/null || tar -xzf "$TMP" -C "$DEST"
 rm -f "$TMP"

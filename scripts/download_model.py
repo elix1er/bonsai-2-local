@@ -41,6 +41,7 @@ def verify_file(path: pathlib.Path) -> bool:
     return False
 
 def main():
+    """Download the model in parallel and verify its size and SHA-256 checksum."""
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     if TARGET_FILE.exists():
         if verify_file(TARGET_FILE):
@@ -64,6 +65,11 @@ def main():
     start_time = time.monotonic()
 
     def fetch_range(idx, start, end):
+        """Write an inclusive byte range to the part file, retrying up to five attempts.
+
+        Update progress for worker ``idx`` as bytes are written, resume from the
+        last written offset after failures, and re-raise the final exception.
+        """
         pos = start
         for attempt in range(5):
             try:
@@ -83,7 +89,7 @@ def main():
                         pos += n
                         progress[idx] += n
                 return
-            except Exception as e:
+            except Exception:
                 if attempt == 4:
                     raise
                 time.sleep(2)
