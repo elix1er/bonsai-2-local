@@ -17,3 +17,4 @@ logs/
 web/node_modules/
 web/dist/
 web/.vite/
+.ruff_cache/
