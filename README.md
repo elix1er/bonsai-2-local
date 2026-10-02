@@ -14,210 +14,107 @@
   <img src="https://img.shields.io/badge/runtime-PrismML%20llama.cpp-2f3b35?style=flat-square" alt="Runtime" />
   <img src="https://img.shields.io/badge/backend-Apple%20Metal-3c4a42?style=flat-square" alt="Backend" />
   <img src="https://img.shields.io/badge/context-32%2C768%20tokens-4f5f56?style=flat-square" alt="Context" />
-  <img src="https://img.shields.io/badge/speed-22.7%20tok%2Fs-34493e?style=flat-square" alt="Speed" />
 </p>
 
----
 
-## Overview
+## Run local chat
 
-This repository sets up a self-contained local inference stack for `prism-ml/Ternary-Bonsai-2-27B` using the `PQ2_0` quantization format on Apple Silicon.
-
-It provides:
-- A local `llama-server` process with 100% Metal GPU layer offload.
-- An OpenAI-compatible HTTP API on `http://127.0.0.1:8080/v1`.
-- A browser-based chat frontend with real-time token metrics.
-- Reproducible scripts to download, verify, start, stop, and share the model.
-
-```
-┌────────────────┐     HTTP / SSE      ┌──────────────────────────┐
-│  Client / Agent │ ──────────────────> │   llama-server (:8080)   │
-│   (cURL, etc.)  │ <────────────────── │  Metal GPU, 32k context  │
-└────────────────┘                     └─────────────┬────────────┘
-                                                     │
-┌────────────────┐     Vite proxy                    │
-│  Browser Chat   │ ──────────────────> localhost:5173
-│  (SSE metrics)  │
-└────────────────┘
-```
-
----
-
-## Why standard llama.cpp fails
-
-Bonsai 2 relies on an activation transform (a randomized Hadamard transform) coupled with ternary quantization (`PQ2_0`, 2.13 bits per weight).
-
-Upstream `llama.cpp`, Ollama, and generic GGUF runners read the file metadata and allocate memory without throwing an error. Because they lack the Hadamard transform kernel, the forward pass produces corrupted tokens, repetitive loops, or symbol soup.
-
-This setup locks to PrismML's official ARM64 binary build (`prism-b10709-9a9394a`), which implements the required activation kernels for Apple Metal.
-
----
-
-## Verified benchmarks
-
-Measurements taken on an Apple M3 Max with 36 GB unified memory running macOS Sonoma:
-
-| Parameter | Measurement | Notes |
-| :--- | :--- | :--- |
-| Decode throughput | 22.4 to 23.1 tok/s | Sustained average 22.7 tok/s |
-| Prefill throughput | ~160 tok/s | Evaluated at 512 prompt tokens |
-| Context window | 32,768 tokens | Set via `--ctx-size 32768` |
-| Weight size on disk | 6.71 GiB | 7,206,168,928 bytes |
-| Total RAM footprint | ~8.2 GiB | Model weights plus 32k context KV cache |
-| Continuous generation | 3,000 tokens in 133.5s | Completed on localhost with zero drops |
-
----
-
-## Quick start
-
-### 1. Setup
-
-Clone the repository and run the setup script:
+Requires macOS on Apple Silicon, Python 3, Node.js compatible with the locked Vite version, and npm.
 
 ```bash
 git clone https://github.com/elix1er/bonsai-2-local.git
 cd bonsai-2-local
 ./setup.sh
-```
-
-`setup.sh` handles four steps:
-1. Downloads the PrismML `llama.cpp` macOS ARM64 binary archive.
-2. Clears Gatekeeper quarantine attributes and applies an ad-hoc code signature.
-3. Downloads `Ternary-Bonsai-2-27B-PQ2_0.gguf` from Hugging Face using 8 parallel chunk workers, then verifies the SHA-256 checksum.
-4. Installs web interface dependencies and builds the production assets.
-
-### 2. Start inference server
-
-```bash
 ./start.sh
-```
-
-The script starts `llama-server` in the background, writes its process ID to `server.pid`, and checks `http://127.0.0.1:8080/health` until ready. Logs stream to `logs/server.log`.
-
-Server flags used:
-- `--ctx-size 32768`
-- `--n-gpu-layers 999`
-- `--flash-attn on`
-- `--cache-type-k f16 --cache-type-v f16`
-- `--cache-ram 0`
-- `--batch-size 2048 --ubatch-size 512`
-
-### 3. Open web chat (optional)
-
-```bash
 ./start-web.sh
 ```
 
-Visit `http://127.0.0.1:5173` in your browser.
+Open `http://127.0.0.1:5173`. Use `./start-web.sh -d` to run the web server in the background. Setup uses `npm ci` and builds the UI, but the launcher serves it through Vite's development server.
 
----
+The model server listens on `127.0.0.1:8080`. The browser sends health and chat requests through the Vite proxy at `/api`.
 
-## Service control
+| Service | Start | Stop | Log |
+| :--- | :--- | :--- | :--- |
+| Model | `./start.sh` | `./stop.sh` | `logs/server.log` |
+| Chat | `./start-web.sh -d` | `./stop-web.sh` | `logs/web.log` |
+| Sharing | `./share.sh` | `./stop-share.sh` | Terminal |
 
-| Script | Action |
-| :--- | :--- |
-| `./setup.sh` | Downloads runtime, fetches model weights, verifies hash, installs web packages |
-| `./start.sh` | Launches `llama-server` in background with Metal acceleration |
-| `./stop.sh` | Stops the running `llama-server` process |
-| `./start-web.sh` | Starts the Vite web UI dev server on port 5173 |
-| `./stop-web.sh` | Stops the web UI server |
-| `./share.sh` | Opens a temporary public Cloudflare Tunnel to port 5173 |
-| `./stop-share.sh` | Terminates the Cloudflare tunnel |
+Launchers record process IDs in the repository root. Stop commands check process ownership before signaling. If a recorded PID belongs to another process, inspect the PID file rather than killing that process.
 
----
+`start.sh` waits up to three minutes for model health. If it times out, the process may still be loading. Inspect `logs/server.log` before retrying.
 
-## API reference
+## Check inference
 
-The server exposes standard OpenAI endpoints at `http://127.0.0.1:8080/v1`.
-
-### Standard completion
+A successful health check proves HTTP readiness. Check generated text as well:
 
 ```bash
-curl -N http://127.0.0.1:8080/v1/chat/completions \
+curl --fail-with-body http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "bonsai-2-27b",
-    "messages": [
-      {"role": "user", "content": "Explain why the sky is blue in two sentences."}
-    ],
-    "stream": true,
-    "max_tokens": 4096,
-    "reasoning_effort": "none",
+    "messages": [{"role": "user", "content": "Explain why the sky is blue in two sentences."}],
+    "max_tokens": 128,
     "chat_template_kwargs": {"enable_thinking": false}
   }'
 ```
 
-### Extended reasoning mode
+For streaming, add `"stream": true` and use `curl -N`. For reasoning, set `"reasoning_effort": "medium"` and `"chat_template_kwargs": {"enable_thinking": true}`.
 
-Bonsai 2 supports internal chain-of-thought thinking tokens:
+## Runtime and model
+
+This setup pins the Prism runtime that supports the model's Hadamard activation transform. Preserve this pairing. Loading a GGUF successfully does not prove that a different runtime produces correct output.
+
+| Setting | Value |
+| :--- | :--- |
+| Runtime | [prism-b10709-9a9394a](https://github.com/PrismML-Eng/llama.cpp/releases/tag/prism-b10709-9a9394a) |
+| Model repository | [prism-ml/Ternary-Bonsai-2-27B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf) |
+| Model revision | `6ed5e12bf84b7a63069882c91dd9e9218647d17b` |
+| File | `Ternary-Bonsai-2-27B-PQ2_0.gguf` |
+| Size | 7,206,168,928 bytes, 6.71 GiB |
+| SHA-256 | `3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1` |
+| Context | 32,768 tokens |
+
+The downloader checks model size and SHA-256 before publishing the completed file. It retries failed byte ranges within a run. Restarting the downloader fetches all ranges again. The runtime archive comes from the pinned release URL and is not independently checksum-verified.
+
+`start.sh` requests full GPU layer offload, flash attention, and f16 KV caches. See the script for the complete launch flags. Performance depends on hardware, prompt length, and context use. Previous local measurements are not a benchmark guarantee.
+
+## Chat behavior
+
+The UI renders sanitized Markdown, streams replies, and can stop a request. Thinking is optional. Continue generating appears when the model reports its output limit and appends to the selected answer.
+
+Live token counts estimate tokens from streamed chunks. Final metrics use server timings when available. The context gauge is approximate until prompt timings arrive. Continuation metrics describe the latest request, not the accumulated answer.
+
+If a request fails or you stop it before producing text, the prompt returns to the composer. Partial output stays in the conversation after an interrupted stream. A connection failure displays an error, not a continuation button.
+
+## Share temporarily
+
+Place a Cloudflare `cloudflared` executable at `bin/cloudflared`. Setup does not install it. Start local inference and chat, then run `./share.sh`. Keep the terminal open and use the printed URL.
+
+The temporary URL exposes chat and the proxied inference endpoints publicly without authentication. Stop sharing with Ctrl+C or `./stop-share.sh` when the test ends.
+
+`share.sh` creates a Quick Tunnel. [Cloudflare documents that Quick Tunnels do not support SSE](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/#limitations), so this streaming chat UI does not support remote replies through that URL. The keepalive setting does not remove this limitation. Use local chat for streaming.
+
+## Maintain the repository
+
+Service launchers live at the root. `scripts/` downloads the runtime and model. `web/src.js` contains chat state and streaming, and `web/vite.config.js` configures the API proxy. Weights, runtimes, logs, process files, and web build outputs are ignored.
+
+Web start and stop commands use `web-control.lock/` to reject overlapping operations. If a control command is killed before cleanup, confirm no start or stop command is running, then remove the leftover directory with `rmdir web-control.lock`.
+
+Run the maintenance checks from the repository root:
 
 ```bash
-curl -N http://127.0.0.1:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "bonsai-2-27b",
-    "messages": [
-      {"role": "user", "content": "How many r characters are in strawberry?"}
-    ],
-    "stream": true,
-    "max_tokens": 8192,
-    "reasoning_effort": "medium",
-    "chat_template_kwargs": {"enable_thinking": true}
-  }'
+shellcheck *.sh scripts/*.sh
+ruff check scripts/ tests/
+python3 -m unittest discover -s tests
+npm run build --prefix web
 ```
 
----
+With local chat running, use an isolated browser session for the mocked streaming checks:
 
-## Web interface
-
-The web client in `web/` provides a focused chat surface:
-- Live generation speed gauge (`tok/s`).
-- Token accounting broken down into reasoning and final response tokens.
-- Context window utilization meter showing used tokens against the 32,768 ceiling.
-- One-click continuation button if output hits the configured token limit.
-
-### Cloudflare tunnel notes
-
-When testing via `share.sh` (`*.trycloudflare.com` quick tunnels), Cloudflare drops idle or unbuffered HTTP connections after roughly 60 seconds. At 22.7 tok/s, that translates to approximately 1,440 generated tokens per burst.
-
-On `localhost`, requests never experience this timeout. The web client handles remote drops cleanly: if the server signals `finish_reason: length` or drops mid-stream, a **Continue generating** button appears so you can resume the response without re-sending earlier turns.
-
----
-
-## Repository layout
-
-```
-├── .gitignore               # Excludes weights, binaries, node_modules, and logs
-├── README.md                # Documentation and operational reference
-├── setup.sh                 # Reproducible environment installer
-├── start.sh                 # Background llama-server runner
-├── stop.sh                  # Graceful server shutdown
-├── start-web.sh             # Vite chat frontend runner
-├── stop-web.sh              # Chat frontend shutdown
-├── share.sh                 # Cloudflare tunnel helper
-├── stop-share.sh            # Tunnel shutdown
-├── assets/
-│   └── tree.svg             # Bonsai vector logo
-├── scripts/
-│   ├── download_runtime.sh  # Fetches PrismML ARM64 binary release
-│   └── download_model.py    # Multi-threaded range downloader with hash check
-└── web/
-    ├── index.html           # Minimal HTML shell
-    ├── package.json         # Frontend dependencies (marked, dompurify, vite)
-    ├── vite.config.js       # Local proxy with extended socket timeout
-    ├── src.js               # Chat client, SSE parser, and metrics renderer
-    └── style.css            # Layout and theme styles
+```bash
+agent-browser --session bonsai-check open http://127.0.0.1:5173
+agent-browser --session bonsai-check eval "$(cat tests/chat-browser.js)"
+agent-browser --session bonsai-check close
 ```
 
----
-
-## Model verification
-
-| Attribute | Specification |
-| :--- | :--- |
-| Repository | [`prism-ml/Ternary-Bonsai-2-27B-gguf`](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf) |
-| Git revision | `6ed5e12bf84b7a63069882c91dd9e9218647d17b` |
-| File | `Ternary-Bonsai-2-27B-PQ2_0.gguf` |
-| Size | 7,206,168,928 bytes (6.71 GiB) |
-| SHA-256 | `3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1` |
-| Runtime release | [`prism-b10709-9a9394a`](https://github.com/PrismML-Eng/llama.cpp/releases/tag/prism-b10709-9a9394a) |
+The browser fixture checks continuation, split CRLF frames, error recovery, and cancellation without sending generation requests to the model.

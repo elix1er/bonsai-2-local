@@ -6,7 +6,7 @@ if [ ! -f "$ROOT/server.pid" ]; then
     exit 0
 fi
 PID="$(cat "$ROOT/server.pid")"
-case "$PID" in ''|*[!0-9]*) echo "Invalid PID file." >&2; exit 1;; esac
+case "$PID" in ''|*[!0-9]*|0*|1) echo "Invalid PID file." >&2; exit 1;; esac
 if ! kill -0 "$PID" 2>/dev/null; then
     rm "$ROOT/server.pid"
     echo "Bonsai is already stopped."

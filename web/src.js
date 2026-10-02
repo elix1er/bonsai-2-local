@@ -125,6 +125,7 @@ function bubble(role, text = '') {
   return { article, body };
 }
 
+/** Send one chat request and append streamed content to its selected answer. */
 async function runChat({
   messagesToSend,
   targetArticle,
@@ -140,6 +141,7 @@ async function runChat({
   existingThought = '',
   isContinuation = false
 }) {
+  if (controller) return;
   const thinking = isContinuation ? false : $('#thinking').checked;
   const maxTokens = thinking ? 8192 : 4096;
 
@@ -157,7 +159,6 @@ async function runChat({
   let reasoning = existingThought;
   let tokenCount = 0;
   let thoughtTokens = 0;
-  let contentTokens = 0;
   let finish = '';
   let serverTimings = null;
   let done = false;
@@ -237,6 +238,7 @@ async function runChat({
     const decoder = new TextDecoder();
     let buffer = '';
 
+    /** Apply content, reasoning, finish status, and timings from an SSE event. */
     function consume(event) {
       const lines = event.split('\n');
       for (const line of lines) {
@@ -277,7 +279,6 @@ async function runChat({
 
         if (delta.content) {
           content += delta.content;
-          contentTokens++;
           tokenCount++;
           markdown(targetBody, content);
           targetSummary.textContent = 'Thoughts';
@@ -294,11 +295,11 @@ async function runChat({
     while (true) {
       const part = await reader.read();
       if (part.done) break;
-      buffer += decoder.decode(part.value, { stream: true }).replace(/\r\n/g, '\n');
-      let index;
-      while ((index = buffer.indexOf('\n\n')) !== -1) {
-        consume(buffer.slice(0, index));
-        buffer = buffer.slice(index + 2);
+      buffer += decoder.decode(part.value, { stream: true });
+      let separator;
+      while ((separator = /\r?\n\r?\n/.exec(buffer)) !== null) {
+        consume(buffer.slice(0, separator.index));
+        buffer = buffer.slice(separator.index + separator[0].length);
       }
     }
     buffer += decoder.decode();
@@ -316,7 +317,6 @@ async function runChat({
 
     renderStats(false);
 
-    // If truncated due to output token limit, provide a 1-click Continue button
     if (finish === 'length') {
       $('#activity').textContent = 'Reply limit reached · click Continue';
       if (targetActions) {
@@ -325,10 +325,10 @@ async function runChat({
         contBtn.type = 'button';
         contBtn.innerHTML = 'Continue generating ↳';
         contBtn.onclick = () => {
+          if (controller) return;
           contBtn.remove();
           const continuationMessages = [
             ...history.slice(0, assistantIndex),
-            { role: 'user', content: history[assistantIndex - 1]?.content || 'Prompt' },
             { role: 'assistant', content: content },
             { role: 'user', content: 'Continue directly from where you stopped. Do not repeat anything previously written, resume immediately.' }
           ];
@@ -357,6 +357,11 @@ async function runChat({
   } catch (error) {
     if (history[assistantIndex]) {
       history[assistantIndex].content = content;
+    }
+    if (!content && !isContinuation) {
+      history.splice(assistantIndex - 1, 2);
+      prompt.value = messagesToSend[messagesToSend.length - 1]?.content || '';
+      resize();
     }
     renderStats(false);
 
