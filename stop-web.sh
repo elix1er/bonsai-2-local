@@ -6,12 +6,24 @@ if [ ! -f "$ROOT/web.pid" ]; then
     exit 0
 fi
 PID="$(cat "$ROOT/web.pid")"
-case "$PID" in ''|*[!0-9]*) echo "Invalid web UI PID." >&2; exit 1;; esac
+case "$PID" in ''|*[!0-9]*|0*|1) echo "Invalid web UI PID." >&2; exit 1;; esac
 if ! kill -0 "$PID" 2>/dev/null; then
     rm -f "$ROOT/web.pid"
     echo "Web UI is already stopped."
     exit 0
 fi
-kill -TERM "$PID" 2>/dev/null || true
-rm -f "$ROOT/web.pid"
-echo "Web UI stopped."
+case "$(ps -p "$PID" -o command=)" in
+    *"node $ROOT/web/node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort") ;;
+    *) echo "PID $PID belongs to another process; refusing to stop it." >&2; exit 1;;
+esac
+kill -TERM "$PID"
+for ((i=0; i<10; i++)); do
+    if ! kill -0 "$PID" 2>/dev/null; then
+        rm -f "$ROOT/web.pid"
+        echo "Web UI stopped."
+        exit 0
+    fi
+    sleep 1
+done
+echo "PID $PID has not exited; inspect it before taking further action." >&2
+exit 1

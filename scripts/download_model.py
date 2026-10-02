@@ -54,10 +54,8 @@ def main():
     print(f"==> Downloading {FILENAME} ({EXPECTED_SIZE / (1024**3):.2f} GiB)...")
     print(f"Source: {url}")
 
-    if not PART_FILE.exists():
-        with PART_FILE.open("wb") as f:
-            f.truncate(EXPECTED_SIZE)
-
+    with PART_FILE.open("a+b") as part:
+        part.truncate(EXPECTED_SIZE)
     fd = os.open(str(PART_FILE), os.O_WRONLY)
     num_workers = 8
     chunk_size = (EXPECTED_SIZE + num_workers - 1) // num_workers
@@ -78,14 +76,16 @@ def main():
                     headers={"Range": f"bytes={pos}-{end}"}
                 )
                 with urllib.request.urlopen(req, timeout=60) as resp:
-                    assert resp.status == 206, f"Bad status: {resp.status}"
+                    expected_range = f"bytes {pos}-{end}/{EXPECTED_SIZE}"
+                    if resp.status != 206 or resp.headers.get("Content-Range") != expected_range:
+                        raise IOError("Server did not return the requested byte range")
                     while pos <= end:
                         data = resp.read(min(1024 * 1024, end - pos + 1))
                         if not data:
-                            if pos <= end:
-                                raise IOError("Truncated read")
-                            break
+                            raise IOError("Truncated read")
                         n = os.pwrite(fd, data, pos)
+                        if n == 0:
+                            raise IOError("Could not write model data")
                         pos += n
                         progress[idx] += n
                 return
@@ -94,26 +94,28 @@ def main():
                     raise
                 time.sleep(2)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-        futures = []
-        for i in range(num_workers):
-            s = i * chunk_size
-            e = min(EXPECTED_SIZE - 1, (i + 1) * chunk_size - 1)
-            if s < EXPECTED_SIZE:
-                futures.append(executor.submit(fetch_range, i, s, e))
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = []
+            for i in range(num_workers):
+                s = i * chunk_size
+                e = min(EXPECTED_SIZE - 1, (i + 1) * chunk_size - 1)
+                if s < EXPECTED_SIZE:
+                    futures.append(executor.submit(fetch_range, i, s, e))
 
-        while not all(f.done() for f in futures):
-            downloaded = sum(progress)
-            pct = (downloaded / EXPECTED_SIZE) * 100
-            elapsed = time.monotonic() - start_time
-            speed_mb = (downloaded / (1024 * 1024)) / max(0.1, elapsed)
-            print(f"\rProgress: {pct:.1f}% ({downloaded / (1024**3):.2f}/{EXPECTED_SIZE / (1024**3):.2f} GiB) @ {speed_mb:.1f} MB/s", end="", flush=True)
-            time.sleep(1)
+            while not all(f.done() for f in futures):
+                downloaded = sum(progress)
+                pct = (downloaded / EXPECTED_SIZE) * 100
+                elapsed = time.monotonic() - start_time
+                speed_mb = (downloaded / (1024 * 1024)) / max(0.1, elapsed)
+                print(f"\rProgress: {pct:.1f}% ({downloaded / (1024**3):.2f}/{EXPECTED_SIZE / (1024**3):.2f} GiB) @ {speed_mb:.1f} MB/s", end="", flush=True)
+                time.sleep(1)
 
-        for f in futures:
-            f.result()
+            for f in futures:
+                f.result()
+    finally:
+        os.close(fd)
 
-    os.close(fd)
     print("\nDownload complete. Running integrity check...")
     if not verify_file(PART_FILE):
         print("Verification failed! Removing corrupted part file.")

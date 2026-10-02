@@ -6,7 +6,7 @@ MODEL="$ROOT/models/Ternary-Bonsai-2-27B-PQ2_0.gguf"
 mkdir -p "$ROOT/logs"
 if [ -f "$ROOT/server.pid" ]; then
     PID="$(cat "$ROOT/server.pid")"
-    case "$PID" in ''|*[!0-9]*) echo "Invalid PID file." >&2; exit 1;; esac
+    case "$PID" in ''|*[!0-9]*|0*|1) echo "Invalid PID file." >&2; exit 1;; esac
     if kill -0 "$PID" 2>/dev/null; then
         case "$(ps -p "$PID" -o command=)" in
             "$BIN "*) echo "Bonsai is already running. Check http://127.0.0.1:8080/health"; exit 0;;

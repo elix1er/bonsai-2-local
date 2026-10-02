@@ -140,6 +140,7 @@ async function runChat({
   existingThought = '',
   isContinuation = false
 }) {
+  if (controller) return;
   const thinking = isContinuation ? false : $('#thinking').checked;
   const maxTokens = thinking ? 8192 : 4096;
 
@@ -157,7 +158,6 @@ async function runChat({
   let reasoning = existingThought;
   let tokenCount = 0;
   let thoughtTokens = 0;
-  let contentTokens = 0;
   let finish = '';
   let serverTimings = null;
   let done = false;
@@ -277,7 +277,6 @@ async function runChat({
 
         if (delta.content) {
           content += delta.content;
-          contentTokens++;
           tokenCount++;
           markdown(targetBody, content);
           targetSummary.textContent = 'Thoughts';
@@ -294,11 +293,11 @@ async function runChat({
     while (true) {
       const part = await reader.read();
       if (part.done) break;
-      buffer += decoder.decode(part.value, { stream: true }).replace(/\r\n/g, '\n');
+      buffer += decoder.decode(part.value, { stream: true });
       let index;
-      while ((index = buffer.indexOf('\n\n')) !== -1) {
+      while ((index = buffer.search(/\r?\n\r?\n/)) !== -1) {
         consume(buffer.slice(0, index));
-        buffer = buffer.slice(index + 2);
+        buffer = buffer.slice(index + (buffer[index] === '\r' ? 4 : 2));
       }
     }
     buffer += decoder.decode();
@@ -316,7 +315,6 @@ async function runChat({
 
     renderStats(false);
 
-    // If truncated due to output token limit, provide a 1-click Continue button
     if (finish === 'length') {
       $('#activity').textContent = 'Reply limit reached · click Continue';
       if (targetActions) {
@@ -325,10 +323,10 @@ async function runChat({
         contBtn.type = 'button';
         contBtn.innerHTML = 'Continue generating ↳';
         contBtn.onclick = () => {
+          if (controller) return;
           contBtn.remove();
           const continuationMessages = [
             ...history.slice(0, assistantIndex),
-            { role: 'user', content: history[assistantIndex - 1]?.content || 'Prompt' },
             { role: 'assistant', content: content },
             { role: 'user', content: 'Continue directly from where you stopped. Do not repeat anything previously written, resume immediately.' }
           ];
@@ -358,6 +356,7 @@ async function runChat({
     if (history[assistantIndex]) {
       history[assistantIndex].content = content;
     }
+    if (!content && !isContinuation) history.splice(assistantIndex - 1, 2);
     renderStats(false);
 
     if (error.name === 'AbortError') {

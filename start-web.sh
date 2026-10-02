@@ -1,16 +1,56 @@
 #!/bin/bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-mkdir -p "$ROOT/logs"
-
-cd "$ROOT/web"
-if [ "${1:-}" = "--background" ] || [ "${1:-}" = "-d" ]; then
-    npm run dev > "$ROOT/logs/web.log" 2>&1 &
-    PID=$!
-    echo "$PID" > "$ROOT/web.pid"
-    echo "Web UI started in background (PID $PID). Visit http://127.0.0.1:5173"
-else
-    echo "Starting Web UI on http://127.0.0.1:5173 (Ctrl+C to stop)..."
-    echo "$$" > "$ROOT/web.pid"
-    exec npm run dev
+VITE="$ROOT/web/node_modules/vite/bin/vite.js"
+case "${1:-}" in
+    ''|-d|--background) ;;
+    *) echo "Usage: ./start-web.sh [-d|--background]" >&2; exit 1;;
+esac
+if [ -f "$ROOT/web.pid" ]; then
+    PID="$(cat "$ROOT/web.pid")"
+    case "$PID" in ''|*[!0-9]*|0*|1) echo "Invalid web UI PID." >&2; exit 1;; esac
+    if kill -0 "$PID" 2>/dev/null; then
+        case "$(ps -p "$PID" -o command=)" in
+            *"node $VITE --host 127.0.0.1 --port 5173 --strictPort") echo "Web UI is already running: http://127.0.0.1:5173"; exit 0;;
+            *) echo "Recorded PID belongs to another process; inspect web.pid." >&2; exit 1;;
+        esac
+    fi
 fi
+if lsof -nP -iTCP:5173 -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "Port 5173 is already in use; leaving its process alone." >&2
+    exit 1
+fi
+test -f "$VITE"
+mkdir -p "$ROOT/logs"
+cd "$ROOT/web"
+if [ -n "${1:-}" ]; then
+    PID="$(python3 - "$ROOT" "$VITE" <<'PYTHON'
+import pathlib, subprocess, sys
+root = pathlib.Path(sys.argv[1])
+with (root / 'logs/web.log').open('w') as log:
+    process = subprocess.Popen(['node', sys.argv[2], '--host', '127.0.0.1',
+                                '--port', '5173', '--strictPort'],
+                               stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                               start_new_session=True)
+print(process.pid)
+PYTHON
+)"
+    echo "$PID" > "$ROOT/web.pid"
+    for ((i=0; i<10; i++)); do
+        if ! kill -0 "$PID" 2>/dev/null; then
+            rm -f "$ROOT/web.pid"
+            tail -20 "$ROOT/logs/web.log" >&2
+            exit 1
+        fi
+        if curl -fsS --max-time 1 http://127.0.0.1:5173/ >/dev/null 2>&1; then
+            echo "Web UI ready: http://127.0.0.1:5173 (PID $PID)"
+            exit 0
+        fi
+        sleep 1
+    done
+    echo "Web UI has not become ready; inspect logs/web.log and web.pid." >&2
+    exit 1
+fi
+echo "Starting web UI: http://127.0.0.1:5173 (Ctrl+C to stop)"
+echo "$$" > "$ROOT/web.pid"
+exec node "$VITE" --host 127.0.0.1 --port 5173 --strictPort
