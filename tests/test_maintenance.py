@@ -8,6 +8,8 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import time
+import urllib.request
 import unittest
 from unittest.mock import patch
 
@@ -49,6 +51,7 @@ class ProcessControlTests(unittest.TestCase):
             try:
                 start = subprocess.run(['bash', str(root / 'start-web.sh'), '-d'], capture_output=True, timeout=15)
                 self.assertEqual(start.returncode, 0, start.stderr)
+                self.assertFalse((root / 'web-control.lock').exists())
                 pid = (root / 'web.pid').read_text()
                 again = subprocess.run(['bash', str(root / 'start-web.sh'), '-d'], capture_output=True)
                 self.assertEqual(again.returncode, 0, again.stderr)
@@ -59,6 +62,53 @@ class ProcessControlTests(unittest.TestCase):
             finally:
                 if (root / 'web.pid').exists():
                     os.kill(int((root / 'web.pid').read_text()), 15)
+
+    def test_foreground_web_releases_lock_after_readiness(self):
+        """Keep foreground chat stoppable after startup releases its control lock."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with socket.socket() as listener:
+                listener.bind(('127.0.0.1', 0))
+                port = listener.getsockname()[1]
+            vite = root / 'web/node_modules/vite/bin/vite.js'
+            vite.parent.mkdir(parents=True)
+            vite.write_text("require('http').createServer((req,res)=>res.end('ready')).listen(Number(process.argv[process.argv.indexOf('--port')+1]),'127.0.0.1');")
+            for script in ['start-web.sh', 'stop-web.sh']:
+                (root / script).write_text((ROOT / script).read_text().replace('5173', str(port)))
+            process = subprocess.Popen(['bash', str(root / 'start-web.sh')], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                for _ in range(100):
+                    if (root / 'web.pid').exists() and not (root / 'web-control.lock').exists():
+                        break
+                    time.sleep(0.05)
+                self.assertIsNone(process.poll())
+                self.assertFalse((root / 'web-control.lock').exists())
+                with urllib.request.urlopen(f'http://127.0.0.1:{port}', timeout=2) as response:
+                    self.assertEqual(response.read(), b'ready')
+                stopped = subprocess.run(['bash', str(root / 'stop-web.sh')], capture_output=True, timeout=15)
+                self.assertEqual(stopped.returncode, 0, stopped.stderr)
+                process.wait(timeout=5)
+                self.assertFalse((root / 'web.pid').exists())
+            finally:
+                if (root / 'web.pid').exists():
+                    os.kill(int((root / 'web.pid').read_text()), 15)
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=5)
+
+    def test_overlapping_web_commands_are_rejected(self):
+        """Preserve the PID record when another web control command owns the lock."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'web-control.lock').mkdir()
+            (root / 'web.pid').write_text('4242')
+            for script in ['start-web.sh', 'stop-web.sh']:
+                shutil.copy(ROOT / script, root / script)
+                result = subprocess.run(['bash', str(root / script), '-d'], capture_output=True)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(b'Another web control command', result.stderr)
+                self.assertEqual((root / 'web.pid').read_text(), '4242')
+                self.assertTrue((root / 'web-control.lock').exists())
 
     def test_shutdown_states(self):
         """Check zombies, delayed exit, and timeout without signaling live services."""

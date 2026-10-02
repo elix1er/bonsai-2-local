@@ -1,12 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+# Keep web startup, PID publication, and shutdown from overlapping.
+if ! mkdir "$ROOT/web-control.lock" 2>/dev/null; then
+    echo "Another web control command is running; try again after it finishes." >&2
+    exit 1
+fi
+trap 'rmdir "$ROOT/web-control.lock"' EXIT
 if [ ! -f "$ROOT/web.pid" ]; then
     echo "No recorded web UI process."
     exit 0
 fi
 PID="$(cat "$ROOT/web.pid")"
 case "$PID" in ''|*[!0-9]*|0*|1) echo "Invalid web UI PID." >&2; exit 1;; esac
+# Return success only for a live process that has not become a zombie.
 process_running() {
     local state
     state="$(ps -p "$PID" -o stat= 2>/dev/null)" || return 1

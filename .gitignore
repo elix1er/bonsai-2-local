@@ -19,3 +19,5 @@ web/dist/
 web/.vite/
 .ruff_cache/
 __pycache__/
+
+web-control.lock/

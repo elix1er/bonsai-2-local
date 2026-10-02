@@ -125,6 +125,7 @@ function bubble(role, text = '') {
   return { article, body };
 }
 
+/** Send one chat request and append streamed content to its selected answer. */
 async function runChat({
   messagesToSend,
   targetArticle,
@@ -237,6 +238,7 @@ async function runChat({
     const decoder = new TextDecoder();
     let buffer = '';
 
+    /** Apply content, reasoning, finish status, and timings from an SSE event. */
     function consume(event) {
       const lines = event.split('\n');
       for (const line of lines) {

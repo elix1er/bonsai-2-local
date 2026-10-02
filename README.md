@@ -98,6 +98,8 @@ The temporary URL exposes chat and the proxied inference endpoints publicly with
 
 Service launchers live at the root. `scripts/` downloads the runtime and model. `web/src.js` contains chat state and streaming, and `web/vite.config.js` configures the API proxy. Weights, runtimes, logs, process files, and web build outputs are ignored.
 
+Web start and stop commands use `web-control.lock/` to reject overlapping operations. If a control command is killed before cleanup, confirm no start or stop command is running, then remove the leftover directory with `rmdir web-control.lock`.
+
 Run the maintenance checks from the repository root:
 
 ```bash

@@ -4,6 +4,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 if [ ! -f "$ROOT/tunnel.pid" ]; then echo "No recorded tunnel."; exit 0; fi
 PID="$(cat "$ROOT/tunnel.pid")"
 case "$PID" in ''|*[!0-9]*|0*|1) echo "Invalid tunnel PID." >&2; exit 1;; esac
+# Return success only for a live process that has not become a zombie.
 process_running() {
     local state
     state="$(ps -p "$PID" -o stat= 2>/dev/null)" || return 1
