@@ -7,7 +7,13 @@ if [ ! -f "$ROOT/web.pid" ]; then
 fi
 PID="$(cat "$ROOT/web.pid")"
 case "$PID" in ''|*[!0-9]*|0*|1) echo "Invalid web UI PID." >&2; exit 1;; esac
-if ! kill -0 "$PID" 2>/dev/null; then
+process_running() {
+    local state
+    state="$(ps -p "$PID" -o stat= 2>/dev/null)" || return 1
+    case "$state" in *Z*) return 1;; esac
+    kill -0 "$PID" 2>/dev/null
+}
+if ! process_running; then
     rm -f "$ROOT/web.pid"
     echo "Web UI is already stopped."
     exit 0
@@ -18,7 +24,7 @@ case "$(ps -p "$PID" -o command=)" in
 esac
 kill -TERM "$PID"
 for ((i=0; i<10; i++)); do
-    if ! kill -0 "$PID" 2>/dev/null; then
+    if ! process_running; then
         rm -f "$ROOT/web.pid"
         echo "Web UI stopped."
         exit 0

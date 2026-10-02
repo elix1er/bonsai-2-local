@@ -84,7 +84,7 @@ The UI renders sanitized Markdown, streams replies, and can stop a request. Thin
 
 Live token counts estimate tokens from streamed chunks. Final metrics use server timings when available. The context gauge is approximate until prompt timings arrive. Continuation metrics describe the latest request, not the accumulated answer.
 
-If a request fails before producing text, the prompt returns to the composer. Partial output stays in the conversation after an interrupted stream. A connection failure displays an error, not a continuation button.
+If a request fails or you stop it before producing text, the prompt returns to the composer. Partial output stays in the conversation after an interrupted stream. A connection failure displays an error, not a continuation button.
 
 ## Share temporarily
 
@@ -92,7 +92,7 @@ Place a Cloudflare `cloudflared` executable at `bin/cloudflared`. Setup does not
 
 The temporary URL exposes chat and the proxied inference endpoints publicly without authentication. Stop sharing with Ctrl+C or `./stop-share.sh` when the test ends.
 
-Remote streaming depends on the tunnel service. Its keepalive setting does not guarantee a stream duration. Test the actual URL before relying on remote chat.
+`share.sh` creates a Quick Tunnel. [Cloudflare documents that Quick Tunnels do not support SSE](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/#limitations), so this streaming chat UI does not support remote replies through that URL. The keepalive setting does not remove this limitation. Use local chat for streaming.
 
 ## Maintain the repository
 

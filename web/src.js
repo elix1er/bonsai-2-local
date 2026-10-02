@@ -294,10 +294,10 @@ async function runChat({
       const part = await reader.read();
       if (part.done) break;
       buffer += decoder.decode(part.value, { stream: true });
-      let index;
-      while ((index = buffer.search(/\r?\n\r?\n/)) !== -1) {
-        consume(buffer.slice(0, index));
-        buffer = buffer.slice(index + (buffer[index] === '\r' ? 4 : 2));
+      let separator;
+      while ((separator = /\r?\n\r?\n/.exec(buffer)) !== null) {
+        consume(buffer.slice(0, separator.index));
+        buffer = buffer.slice(separator.index + separator[0].length);
       }
     }
     buffer += decoder.decode();
@@ -356,7 +356,11 @@ async function runChat({
     if (history[assistantIndex]) {
       history[assistantIndex].content = content;
     }
-    if (!content && !isContinuation) history.splice(assistantIndex - 1, 2);
+    if (!content && !isContinuation) {
+      history.splice(assistantIndex - 1, 2);
+      prompt.value = messagesToSend[messagesToSend.length - 1]?.content || '';
+      resize();
+    }
     renderStats(false);
 
     if (error.name === 'AbortError') {

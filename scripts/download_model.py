@@ -24,6 +24,7 @@ TARGET_FILE = MODELS_DIR / FILENAME
 PART_FILE = MODELS_DIR / f"{FILENAME}.part"
 
 def verify_file(path: pathlib.Path) -> bool:
+    """Check model size and pinned SHA-256 before accepting an existing file."""
     if not path.is_file():
         return False
     if path.stat().st_size != EXPECTED_SIZE:
