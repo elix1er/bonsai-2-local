@@ -366,6 +366,52 @@ for (const wrongRange of [false, true])
     }
   });
 
+test("terminal range failure aborts siblings and removes the partial file", async () => {
+  const root = await fixture();
+  const data = new TextEncoder().encode("abcdefgh".repeat(8));
+  let siblingRequests = 0;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const match = /^bytes=(\\d+)-(\\d+)$/.exec(
+        request.headers.get("range") || "",
+      );
+      if (!match) return new Response(null, { status: 400 });
+      const start = Number(match[1]),
+        end = Number(match[2]);
+      if (start === 0) {
+        await Bun.sleep(10);
+        return new Response(null, { status: 500 });
+      }
+      siblingRequests++;
+      await Bun.sleep(500);
+      return new Response(data.slice(start, end + 1), {
+        status: 206,
+        headers: {
+          "Content-Range": `bytes ${start}-${end}/${data.length}`,
+        },
+      });
+    },
+  });
+  onTestFinished(() => server.stop(true));
+  await expect(
+    downloadModel({
+      directory: root,
+      url: server.url.href,
+      size: data.length,
+      checksum: "0".repeat(64),
+      workers: 2,
+      retryDelayMs: 10,
+      timeoutMs: 1000,
+    }),
+  ).rejects.toThrow("requested byte range");
+  expect(siblingRequests).toBe(1);
+  expect(await Bun.file(path.join(root, `${FILENAME}.part`)).exists()).toBe(
+    false,
+  );
+});
+
 test("truncated ranges retry from the last written byte and an existing verified model is reused", async () => {
   const root = await fixture();
   const data = new TextEncoder().encode("abcdefgh".repeat(8));
