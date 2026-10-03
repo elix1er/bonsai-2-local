@@ -20,4 +20,6 @@ web/.vite/
 .ruff_cache/
 __pycache__/
 
-web-control.lock/
+*-control.lock/
+web/test-results/
+web/playwright-report/

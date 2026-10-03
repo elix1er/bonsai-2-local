@@ -8,12 +8,29 @@ echo "=========================================================="
 echo "    Bonsai 2 (27B PQ2_0) Local Inference Stack Setup     "
 echo "=========================================================="
 
-ARCH="$(uname -m)"
-OS="$(uname -s)"
-
-if [ "$OS" != "Darwin" ] || [ "$ARCH" != "arm64" ]; then
-    echo "Warning: This setup is optimized for Apple Silicon (macOS arm64)."
+if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
+    echo "This setup requires macOS on Apple Silicon." >&2
+    exit 1
 fi
+for tool in python3 node npm curl tar xattr codesign lsof; do
+    if ! command -v "$tool" >/dev/null; then echo "Missing prerequisite: $tool" >&2; exit 1; fi
+done
+node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (!((major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major > 22)) { console.error("Use Node 20.19+ or 22.12+; Node 21 is unsupported."); process.exit(1); }'
+python3 - "$ROOT" <<'PYTHON'
+import pathlib
+import shutil
+import sys
+root = pathlib.Path(sys.argv[1])
+model = root / 'models/Ternary-Bonsai-2-27B-PQ2_0.gguf'
+required = 1024**3 if model.is_file() and model.stat().st_size == 7206168928 else 12 * 1024**3
+if shutil.disk_usage(root).free < required:
+    sys.exit(f"Setup needs at least {required // 1024**3} GiB of free disk space.")
+PYTHON
+
+SERVICE=setup
+# shellcheck source=scripts/process.sh
+source "$ROOT/scripts/process.sh"
+acquire_lock
 
 chmod +x "$ROOT/scripts/download_runtime.sh"
 "$ROOT/scripts/download_runtime.sh"
