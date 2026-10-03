@@ -1,7 +1,7 @@
 import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests",
-  testMatch: "*.spec.js",
+  testMatch: "*.spec.ts",
   fullyParallel: true,
   workers: 2,
   use: {
@@ -15,7 +15,7 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: "node server.js --port 5187",
+    command: "bun server.ts --port 5187",
     url: "http://127.0.0.1:5187",
     reuseExistingServer: false,
   },

@@ -48,7 +48,7 @@ class ProcessControlTests(unittest.TestCase):
                 listener.bind(('127.0.0.1', 0))
                 port = listener.getsockname()[1]
             (root / 'scripts/process.sh').write_text((ROOT / 'scripts/process.sh').read_text().replace('5173', str(port)))
-            vite = root / 'web/server.js'
+            vite = root / 'web/server.ts'
             vite.parent.mkdir(parents=True)
             (root / 'web/dist').mkdir()
             (root / 'web/dist/index.html').write_text('fixture')
@@ -80,7 +80,7 @@ class ProcessControlTests(unittest.TestCase):
                 listener.bind(('127.0.0.1', 0))
                 port = listener.getsockname()[1]
             (root / 'scripts/process.sh').write_text((ROOT / 'scripts/process.sh').read_text().replace('5173', str(port)))
-            vite = root / 'web/server.js'
+            vite = root / 'web/server.ts'
             vite.parent.mkdir(parents=True)
             (root / 'web/dist').mkdir()
             (root / 'web/dist/index.html').write_text('fixture')
@@ -133,7 +133,7 @@ class ProcessControlTests(unittest.TestCase):
             root = Path(directory)
             blocked = root / 'web.pid'
             blocked.mkdir()
-            process = subprocess.Popen(['node', '-e', 'setInterval(() => {}, 1000)'])
+            process = subprocess.Popen(['bun', '-e', 'setInterval(() => {}, 1000)'])
             try:
                 result = subprocess.run(['bash', '-c', 'source "$1"; PID="$2"; PID_FILE="$3"; publish_pid', 'fixture', str(ROOT / 'scripts/process.sh'), str(process.pid), str(blocked)], capture_output=True, timeout=15)
                 self.assertEqual(result.returncode, 1)
@@ -149,7 +149,7 @@ class ProcessControlTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             blocked = Path(directory) / 'web.pid'
             blocked.mkdir()
-            process = subprocess.Popen(['node', '-e', 'process.on("SIGTERM", () => {}); console.log("ready"); setInterval(() => {}, 1000)'], stdout=subprocess.PIPE, text=True)
+            process = subprocess.Popen(['bun', '-e', 'process.on("SIGTERM", () => {}); console.log("ready"); setInterval(() => {}, 1000)'], stdout=subprocess.PIPE, text=True)
             try:
                 self.assertEqual(process.stdout.readline().strip(), 'ready')
                 result = subprocess.run(['bash', '-c', 'sleep() { return 0; }; source "$1"; PID="$2"; PID_FILE="$3"; publish_pid', 'fixture', str(ROOT / 'scripts/process.sh'), str(process.pid), str(blocked)], capture_output=True, timeout=5)
@@ -173,7 +173,7 @@ class ProcessControlTests(unittest.TestCase):
                     commands.mkdir()
                     (root / script).write_text((ROOT / script).read_text())
                     (root / pidfile).write_text('4242')
-                    command = (f'node {root}/web/server.js --port 5173'
+                    command = (f'bun {root}/web/server.ts --port 5173'
                                if script == 'stop-web.sh' else f'{root}/bin/cloudflared tunnel --url fixture'
                                if script == 'stop-share.sh' else f'{root}/runtime/bin/mac/llama-server --model fixture')
                     (commands / 'ps').write_text(f"#!/bin/bash\nif [ \"$4\" = stat= ]; then\n"
@@ -224,17 +224,17 @@ class SetupTests(unittest.TestCase):
             self.assertFalse((root / 'runtime').exists())
 
     def test_missing_prerequisite_stops_before_downloads(self):
-        """Report missing npm before fetching the model or runtime."""
+        """Report missing Bun before fetching the model or runtime."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             shutil.copy(ROOT / 'setup.sh', root / 'setup.sh')
-            for tool in ['dirname', 'python3', 'node']:
+            for tool in ['dirname', 'python3']:
                 (root / tool).symlink_to(shutil.which(tool))
             (root / 'uname').write_text('#!/bin/bash\nif [ "$1" = -s ]; then echo Darwin; else echo arm64; fi\n')
             (root / 'uname').chmod(0o755)
             result = subprocess.run(['/bin/bash', str(root / 'setup.sh')], env=dict(os.environ, PATH=str(root)), capture_output=True)
             self.assertEqual(result.returncode, 1)
-            self.assertIn(b'Missing prerequisite: npm', result.stderr)
+            self.assertIn(b'Missing prerequisite: bun', result.stderr)
             self.assertFalse((root / 'runtime').exists())
 
     def test_overlapping_setup_is_rejected(self):
@@ -247,7 +247,7 @@ class SetupTests(unittest.TestCase):
             (root / 'setup-control.lock').mkdir()
             commands = root / 'commands'
             commands.mkdir()
-            for tool in ['python3', 'node', 'npm', 'curl', 'tar', 'xattr', 'codesign', 'lsof']:
+            for tool in ['python3', 'bun', 'curl', 'tar', 'xattr', 'codesign', 'lsof']:
                 (commands / tool).write_text('#!/bin/bash\nexit 0\n')
                 (commands / tool).chmod(0o755)
             (commands / 'uname').write_text('#!/bin/bash\nif [ "$1" = -s ]; then echo Darwin; else echo arm64; fi\n')

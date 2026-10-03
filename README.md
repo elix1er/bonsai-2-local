@@ -6,7 +6,7 @@ Local chat with Ternary Bonsai 2 27B on Apple Silicon, using the matching Prism 
 
 ## Run chat
 
-Requires macOS on Apple Silicon, Python 3, npm, and Node 20.19+ or 22.12+. Node 21 is unsupported. A fresh setup needs 12 GiB of free disk space. Setup checks these prerequisites before downloading anything and rejects overlapping setup runs.
+Requires macOS on Apple Silicon, Python 3 and Bun 1.4+. The locked toolchain uses Bun 1.4.2. Install Bun using its [official instructions](https://bun.sh/docs/installation). A fresh setup needs 12 GiB of free disk space. Setup checks these prerequisites before downloading anything and rejects overlapping setup runs.
 
 ```bash
 git clone https://github.com/elix1er/bonsai-2-local.git
@@ -16,7 +16,7 @@ cd bonsai-2-local
 ./start-web.sh
 ```
 
-Open `http://127.0.0.1:5173`. Setup installs locked dependencies with `npm ci` and builds the UI. The launcher serves that build through a small Node server, bound to localhost. After editing the frontend, run `npm run build --prefix web` and reload the page.
+Open `http://127.0.0.1:5173`. Setup installs locked dependencies with `bun install --frozen-lockfile` and builds the UI. The launcher serves that build through a small Bun server, bound to localhost. After editing the frontend, run `bun run --cwd web build` and reload the page.
 
 | Service | Start | Stop | Log |
 | :--- | :--- | :--- | :--- |
@@ -81,18 +81,20 @@ The URL exposes chat, reply jobs, and the two proxied model endpoints publicly w
 
 ## Develop and check
 
-The frontend stays vanilla JavaScript. `web/src.js` handles UI interactions, `web/chat.js` handles requests and streaming, and `web/session.js` handles saved data. `web/server.js` serves the build and proxies the model. `web/jobs.js` handles bounded remote jobs and cancellation for both normal and development servers. Launchers share PID, lock, and shutdown handling through `scripts/process.sh`.
+The frontend stays vanilla TypeScript. `web/src.ts` handles UI interactions, `web/chat.ts` handles requests and streaming, and `web/session.ts` handles saved data. `web/server.ts` serves the build and proxies the model. `web/jobs.ts` handles bounded remote jobs and cancellation for both normal and development servers. Launchers share PID, lock, and shutdown handling through `scripts/process.sh`.
 
-For frontend development, `npm run dev --prefix web` starts Vite on port 5173 with the same API proxy. Stop the built chat server first. Rebuild before using the normal launcher again.
+Shared Valibot schemas validate data from the model, browser storage, and remote clients. TypeScript derives the application types from those schemas. The web application, configuration, and browser and unit tests are TypeScript. Bun executes server sources directly, so no server compilation or second JavaScript runtime is needed.
+
+For frontend development, `bun run --cwd web dev` starts Vite on port 5173 with the same API proxy. Stop the built chat server first. Rebuild before using the normal launcher again.
 
 Install ShellCheck and Ruff, then prepare the browser once:
 
 ```bash
-npm ci --prefix web
-cd web && npx playwright install chromium && cd ..
+bun install --cwd web --frozen-lockfile
+bun --cwd web --bun playwright install chromium
 ./check.sh
 ```
 
-The check command runs shell and Python lint, process and downloader tests, formatting, the frontend build, Node tests, and Chromium interaction tests. It uses disposable services and mocked model replies. It does not download weights or run inference. GitHub Actions runs the same command on PRs and main.
+The check command runs shell and Python lint, process and downloader tests, formatting, strict TypeScript checking, the frontend build, Vitest tests on Bun, and Chromium interaction tests. It uses disposable services and mocked model replies. It does not download weights or run inference. GitHub Actions runs the same command on PRs and main.
 
 Weights, runtimes, logs, PIDs, control locks, dependencies, builds, and browser reports are ignored. Real model output and an external tunnel still need local acceptance checks.

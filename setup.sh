@@ -12,10 +12,10 @@ if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
     echo "This setup requires macOS on Apple Silicon." >&2
     exit 1
 fi
-for tool in python3 node npm curl tar xattr codesign lsof; do
+for tool in python3 bun curl tar xattr codesign lsof; do
     if ! command -v "$tool" >/dev/null; then echo "Missing prerequisite: $tool" >&2; exit 1; fi
 done
-node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (!((major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major > 22)) { console.error("Use Node 20.19+ or 22.12+; Node 21 is unsupported."); process.exit(1); }'
+bun -e 'const [major, minor] = Bun.version.split(".").map(Number); if (major < 1 || (major === 1 && minor < 4)) { console.error("Use Bun 1.4 or newer."); process.exit(1); }'
 python3 - "$ROOT" <<'PYTHON'
 import pathlib
 import shutil
@@ -39,8 +39,8 @@ python3 "$ROOT/scripts/download_model.py"
 
 if [ -d "$ROOT/web" ]; then
     echo "==> Installing Vite Web UI dependencies..."
-    npm ci --prefix "$ROOT/web" --no-audit --no-fund
-    npm run build --prefix "$ROOT/web"
+    bun install --cwd "$ROOT/web" --frozen-lockfile
+    bun run --cwd "$ROOT/web" build
 fi
 
 chmod +x "$ROOT"/*.sh

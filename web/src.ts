@@ -1,25 +1,24 @@
+import { errorMessage, type Message, type ModelMessage } from "./contracts.ts";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import "./style.css";
 import treeUrl from "../assets/tree.svg";
-import { CONTEXT_SIZE, contextUsage, requestChat } from "./chat.js";
+import { CONTEXT_SIZE, contextUsage, requestChat } from "./chat.ts";
 import {
   loadSession,
   saveSession,
   clearSession,
   sessionIsCurrent,
   RESET_KEY,
-} from "./session.js";
+} from "./session.ts";
 
 const remote = !["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
-const idleText = remote
-  ? "Hosted on a Mac · via Cloudflare"
-  : "Only on this device";
+const idleText = remote ? "Hosted on a Mac" : "Only on this device";
 const readyText = remote ? "Connected to Bonsai" : "Local & ready";
 
 const tree = `<img src="${treeUrl}" alt="" />`;
 
-document.querySelector("#app").innerHTML = `
+element("#app", HTMLElement).innerHTML = `
 <header>
   <div class="brand">${tree}<span>bonsai<span class="edition">2 / local</span></span></div>
   <div class="header-right">
@@ -66,16 +65,30 @@ document.querySelector("#app").innerHTML = `
   </div>
 </div>`;
 
-const $ = (selector) => document.querySelector(selector);
-const prompt = $("#prompt");
+/** Validate the static DOM once at each lookup and preserve its concrete element type. */
+function element<T extends HTMLElement>(
+  selector: string,
+  constructor: { new (): T },
+): T {
+  const node = document.querySelector(selector);
+  if (!(node instanceof constructor))
+    throw new Error(`Missing UI element: ${selector}`);
+  return node;
+}
+const $ = (selector: string) => element(selector, HTMLElement);
+const thinkingInput = element("#thinking", HTMLInputElement);
+const shortenButton = element("#shorten", HTMLButtonElement);
+const clearButton = element("#clear", HTMLButtonElement);
+const composer = element("#composer", HTMLFormElement);
+const prompt = element("#prompt", HTMLTextAreaElement);
 const saved = loadSession();
-let messages = saved?.messages || [];
-let controller = null;
+let messages: Message[] = saved?.messages || [];
+let controller: AbortController | null = null;
 let retryText = saved?.retryText || "";
-let saveTimer;
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let sessionGeneration = 0;
 prompt.value = saved?.draft || "";
-$("#thinking").checked = saved?.thinking || false;
+thinkingInput.checked = saved?.thinking || false;
 
 /** Save one browser session and report quota or access failures. */
 function persist() {
@@ -87,7 +100,7 @@ function persist() {
   const ok = saveSession({
     messages,
     draft: prompt.value,
-    thinking: $("#thinking").checked,
+    thinking: thinkingInput.checked,
     retryText,
   });
   $("#save-notice").hidden = ok;
@@ -111,13 +124,13 @@ function resize() {
 function updateContext() {
   const usage = contextUsage(
     [...messages, { content: prompt.value }],
-    $("#thinking").checked,
+    thinkingInput.checked,
   );
   $("#context-notice").hidden = !usage.nearLimit;
   $("#context-text").textContent = usage.overLimit
     ? "This chat may exceed the 32k context window with room for a reply. Shorten it or start a new chat."
     : "This chat is nearing the 32k context window. Keep the latest exchange or start a new chat.";
-  $("#shorten").disabled = !!controller || messages.length <= 2;
+  shortenButton.disabled = !!controller || messages.length <= 2;
 }
 
 /** Follow the answer only when the caller decides the reader is near the bottom. */
@@ -126,7 +139,7 @@ function scroll() {
 }
 
 /** Report clipboard permission failures without discarding the displayed text. */
-async function copy(button, text) {
+async function copy(button: HTMLButtonElement, text: string) {
   try {
     await navigator.clipboard.writeText(text);
     button.textContent = "Copied";
@@ -134,12 +147,12 @@ async function copy(button, text) {
     button.textContent = "Copy failed";
   }
   setTimeout(() => {
-    button.textContent = button.dataset.label;
+    button.textContent = button.dataset.label || "Copy";
   }, 1500);
 }
 
 /** Resolve text at click time so appended answers copy their latest content. */
-function copyButton(label, text) {
+function copyButton(label: string, text: () => string) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "quiet copy";
@@ -149,17 +162,18 @@ function copyButton(label, text) {
 }
 
 /** Sanitize generated HTML and attach code-copy controls after generation ends. */
-function markdown(node, text, complete) {
-  node.innerHTML = DOMPurify.sanitize(marked.parse(text));
+function markdown(node: HTMLElement, text: string, complete: boolean) {
+  node.innerHTML = DOMPurify.sanitize(marked.parse(text, { async: false }));
   if (complete)
     node.querySelectorAll("pre").forEach((pre) => {
       const code = pre.querySelector("code");
-      if (code) pre.before(copyButton("Copy code", () => code.textContent));
+      if (code)
+        pre.before(copyButton("Copy code", () => code.textContent || ""));
     });
 }
 
 /** Build one message and keep its elements together for streaming updates. */
-function bubble(message) {
+function bubble(message: Message) {
   const article = document.createElement("article");
   article.className = `message ${message.role}`;
   const name = document.createElement("div");
@@ -171,7 +185,7 @@ function bubble(message) {
   $("#messages").append(article);
   if (message.role === "user") {
     body.textContent = message.content;
-    return { article, body };
+    return { kind: message.role, article, body };
   }
   const details = document.createElement("details");
   const summary = document.createElement("summary");
@@ -188,11 +202,27 @@ function bubble(message) {
   actions.className = "actions";
   meta.append(stats, actions);
   article.append(meta);
-  return { article, body, details, summary, thought, stats, actions };
+  return {
+    kind: message.role,
+    article,
+    body,
+    details,
+    summary,
+    thought,
+    stats,
+    actions,
+  };
 }
 
+type AnswerView = Extract<ReturnType<typeof bubble>, { kind: "assistant" }>;
+
 /** Render content, reasoning, and metrics for the latest request on an answer. */
-function renderAnswer(view, message, live = false, elapsed = 0) {
+function renderAnswer(
+  view: AnswerView,
+  message: Message,
+  live = false,
+  elapsed = 0,
+) {
   view.details.hidden = !message.thought;
   view.thought.textContent = message.thought || "";
   view.summary.textContent =
@@ -243,7 +273,7 @@ function renderAnswer(view, message, live = false, elapsed = 0) {
   // Extending an older answer would invalidate the exchanges after it.
   if (
     message === messages.at(-1) &&
-    ["length", "interrupted"].includes(message.finish)
+    (message.finish === "length" || message.finish === "interrupted")
   ) {
     const button = document.createElement("button");
     button.type = "button";
@@ -251,7 +281,7 @@ function renderAnswer(view, message, live = false, elapsed = 0) {
     button.textContent = "Continue generating";
     button.onclick = () => {
       if (controller) return;
-      const request = [
+      const request: ModelMessage[] = [
         ...messages.map(({ role, content }) => ({ role, content })),
         {
           role: "user",
@@ -266,7 +296,7 @@ function renderAnswer(view, message, live = false, elapsed = 0) {
 }
 
 /** Retry the unanswered prompt while preserving a separately typed draft. */
-function renderRetry(view, text, stopped = false) {
+function renderRetry(view: AnswerView, text: string, stopped = false) {
   view.body.textContent = stopped
     ? "Stopped before an answer arrived."
     : "Could not finish this reply.";
@@ -283,14 +313,18 @@ function renderRetry(view, text, stopped = false) {
 function renderConversation() {
   $("#messages").replaceChildren();
   $("#welcome").hidden = !!(messages.length || retryText);
-  let lastView;
+  let lastView: AnswerView | undefined;
   for (const message of messages) {
-    lastView = bubble(message);
-    if (message.role === "assistant") renderAnswer(lastView, message);
+    const view = bubble(message);
+    if (view.kind === "assistant") {
+      lastView = view;
+      renderAnswer(view, message);
+    }
   }
   if (retryText) {
     bubble({ role: "user", content: retryText });
     const view = bubble({ role: "assistant", content: "" });
+    if (view.kind !== "assistant") throw new Error("Expected answer view");
     view.details.hidden = true;
     renderRetry(view, retryText, true);
   }
@@ -299,15 +333,17 @@ function renderConversation() {
 }
 
 /** Allow one request at a time while keeping Stop and draft editing available. */
-function setBusy(busy) {
+function setBusy(busy: boolean) {
   $("#send").hidden = busy;
   $("#stop").hidden = !busy;
-  $("#clear").disabled = busy;
-  $("#thinking").disabled = busy;
-  $("#shorten").disabled = busy || messages.length <= 2;
-  document.querySelectorAll(".btn-continue").forEach((button) => {
-    button.disabled = busy;
-  });
+  clearButton.disabled = busy;
+  thinkingInput.disabled = busy;
+  shortenButton.disabled = busy || messages.length <= 2;
+  document
+    .querySelectorAll<HTMLButtonElement>(".btn-continue")
+    .forEach((button) => {
+      button.disabled = busy;
+    });
 }
 
 /** Refresh the readiness badge without changing the conversation. */
@@ -325,10 +361,18 @@ async function health() {
   }
 }
 
+/** Read completion state after the asynchronous chunk callback has updated it. */
+const replyLimited = (message: Message) => message.finish === "length";
+
 /** Append a request to its answer while keeping a separately typed draft intact. */
-async function runChat(request, message, view, continuation = false) {
+async function runChat(
+  request: ModelMessage[],
+  message: Message,
+  view: AnswerView,
+  continuation = false,
+) {
   if (controller) return;
-  const thinking = continuation ? false : $("#thinking").checked;
+  const thinking = continuation ? false : thinkingInput.checked;
   if (contextUsage(request, thinking).overLimit) {
     $("#activity").textContent =
       "Chat too long. Shorten it or start a new chat.";
@@ -377,36 +421,35 @@ async function runChat(request, message, view, continuation = false) {
     if (generation !== sessionGeneration) return;
     if (!message.content && !message.thought)
       throw new Error("The model returned an empty answer.");
-    $("#activity").textContent =
-      message.finish === "length"
-        ? "Reply limit reached · Continue is available"
-        : idleText;
+    $("#activity").textContent = replyLimited(message)
+      ? "Reply limit reached · Continue is available"
+      : idleText;
     $("#connection").textContent = readyText;
     $("#connection").className = "online";
   } catch (error) {
+    const aborted = error instanceof Error && error.name === "AbortError";
     if (generation !== sessionGeneration) return;
     message.finish = "interrupted";
     if (!message.content && !continuation) {
       messages.splice(-2);
       if (!prompt.value) {
-        prompt.value = request.at(-1).content;
+        prompt.value = request.at(-1)?.content || "";
         resize();
       }
-      retryText = request.at(-1).content;
+      retryText = request.at(-1)?.content || "";
       view.details.hidden = !message.thought;
-      renderRetry(view, retryText, error.name === "AbortError");
+      renderRetry(view, retryText, aborted);
     }
-    if (error.name !== "AbortError") {
+    if (!aborted) {
       const note = document.createElement("p");
       note.className = "error";
-      note.textContent = error.message;
+      note.textContent = errorMessage(error);
       view.article.append(note);
       health();
     }
-    $("#activity").textContent =
-      error.name === "AbortError"
-        ? "Stopped"
-        : "Reply failed · retry when ready";
+    $("#activity").textContent = aborted
+      ? "Stopped"
+      : "Reply failed · retry when ready";
   } finally {
     controller = null;
     setBusy(false);
@@ -418,13 +461,13 @@ async function runChat(request, message, view, continuation = false) {
 }
 
 /** Send text-only model history and retain the chosen draft during retries. */
-function submitText(text, preserveDraft = false) {
+function submitText(text: string, preserveDraft = false) {
   if (!text || controller) return;
-  const request = [
+  const request: ModelMessage[] = [
     ...messages.map(({ role, content }) => ({ role, content })),
     { role: "user", content: text },
   ];
-  if (contextUsage(request, $("#thinking").checked).overLimit) {
+  if (contextUsage(request, thinkingInput.checked).overLimit) {
     $("#activity").textContent =
       "Message too long for the estimated context budget.";
     updateContext();
@@ -432,7 +475,7 @@ function submitText(text, preserveDraft = false) {
   }
   retryText = "";
   messages.push({ role: "user", content: text });
-  const message = {
+  const message: Message = {
     role: "assistant",
     content: "",
     thought: "",
@@ -441,13 +484,14 @@ function submitText(text, preserveDraft = false) {
   messages.push(message);
   // Re-render so only the most recent answer can be continued.
   const view = renderConversation();
+  if (!view) throw new Error("Expected latest answer view");
   if (!preserveDraft || prompt.value.trim() === text) prompt.value = "";
   resize();
   scroll();
   runChat(request, message, view);
 }
 
-$("#composer").addEventListener("submit", (event) => {
+composer.addEventListener("submit", (event) => {
   event.preventDefault();
   submitText(prompt.value.trim());
 });
@@ -459,15 +503,15 @@ prompt.addEventListener("input", () => {
 prompt.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
-    if (!controller) $("#composer").requestSubmit();
+    if (!controller) composer.requestSubmit();
   }
 });
-$("#thinking").onchange = () => {
+thinkingInput.onchange = () => {
   updateContext();
   persist();
 };
 $("#stop").onclick = () => controller?.abort();
-$("#clear").onclick = () => {
+clearButton.onclick = () => {
   if (controller) return;
   clearTimeout(saveTimer);
   messages = [];
@@ -481,7 +525,7 @@ $("#clear").onclick = () => {
   $("#activity").textContent = idleText;
   prompt.focus();
 };
-$("#shorten").onclick = () => {
+shortenButton.onclick = () => {
   if (controller) return;
   messages = messages.slice(-2);
   renderConversation();
@@ -494,7 +538,7 @@ const presets = [
   "Help me think through an idea. Ask me one useful question to get started.",
 ];
 $(".suggestions")
-  .querySelectorAll("button")
+  .querySelectorAll<HTMLButtonElement>("button")
   .forEach((button, index) => {
     button.onclick = () => {
       prompt.value = presets[index];
@@ -509,9 +553,9 @@ $(".suggestions")
 const last = messages.at(-1);
 if (last?.finish === "interrupted" && !last.content) {
   const user = messages.at(-2);
-  retryText = user.content;
+  retryText = user?.content || "";
   messages.splice(-2);
-  if (!prompt.value) prompt.value = user.content;
+  if (!prompt.value) prompt.value = user?.content || "";
 }
 renderConversation();
 resize();

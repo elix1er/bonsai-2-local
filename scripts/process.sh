@@ -29,8 +29,8 @@ check_owner() {
     local command
     command="$(ps -p "$PID" -o command=)"
     case "$SERVICE:$command" in
-        "web:node $ROOT/web/server.js --port 5173" | \
-        "web:$(command -v node) $ROOT/web/server.js --port 5173" | \
+        "web:bun $ROOT/web/server.ts --port 5173" | \
+        "web:$(command -v bun) $ROOT/web/server.ts --port 5173" | \
         "server:$ROOT/runtime/bin/mac/llama-server "* | \
         "tunnel:$ROOT/bin/cloudflared tunnel "*) return 0;;
         *) echo "PID $PID belongs to another process; inspect $SERVICE.pid." >&2; exit 1;;

@@ -1,3 +1,10 @@
+import type { Page, Route } from "@playwright/test";
+import { requestSchema } from "../contracts.ts";
+import * as v from "valibot";
+const observedRequest = v.object({
+  ...requestSchema.entries,
+  id: v.optional(v.string()),
+});
 import { test, expect } from "@playwright/test";
 
 /** Return a deterministic model event with final timing metadata. */
@@ -6,7 +13,10 @@ function stream(content = "First", finish = "stop") {
 }
 
 /** Intercept model traffic so browser checks never consume real inference resources. */
-async function setup(page, handler) {
+async function setup(
+  page: Page,
+  handler?: (route: Route) => Promise<unknown> | void,
+) {
   await page.route("**/api/health", (route) =>
     route.fulfill({ json: { status: "ok" } }),
   );
@@ -19,7 +29,7 @@ async function setup(page, handler) {
 }
 
 /** Submit through visible controls and wait for completion rather than a fixed delay. */
-async function send(page, text) {
+async function send(page: Page, text: string) {
   await page.getByRole("textbox", { name: "Message Bonsai" }).fill(text);
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(
@@ -30,16 +40,16 @@ async function send(page, text) {
 test("local streaming, continuation, copy actions, and sanitized Markdown", async ({
   page,
 }) => {
-  const requests = [];
+  const requests: v.InferOutput<typeof observedRequest>[] = [];
   await setup(page, (route) => {
-    requests.push(route.request().postDataJSON());
+    requests.push(v.parse(observedRequest, route.request().postDataJSON()));
     return route.fulfill({
       contentType: "text/event-stream",
       body:
         requests.length === 1
           ? stream("First", "length")
           : stream(
-              ' second\n```js\nconst x = 1;\n```\n<img src=x onerror="window.bad=true">',
+              ' second\n```js\nconst x = 1;\n```\n<img src=x onerror="Reflect.get(window, "bad")=true">',
             ),
     });
   });
@@ -59,7 +69,7 @@ test("local streaming, continuation, copy actions, and sanitized Markdown", asyn
   expect(requests[0].reasoning_effort).toBe("none");
   await expect(page.getByRole("button", { name: "Copy answer" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Copy code" })).toBeVisible();
-  expect(await page.evaluate(() => window.bad)).toBeUndefined();
+  expect(await page.evaluate(() => Reflect.get(window, "bad"))).toBeUndefined();
   await expect(page.locator(".stats")).toContainText("20.0 tok/s");
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.getByRole("button", { name: "Copy code" }).click();
@@ -93,10 +103,10 @@ test("conversation, draft, and thinking survive refresh; New chat clears them", 
 test("stop preserves a newer draft and retry sends the failed message once", async ({
   page,
 }) => {
-  let pending;
-  const requests = [];
+  let pending: Route | undefined;
+  const requests: v.InferOutput<typeof observedRequest>[] = [];
   await setup(page, (route) => {
-    requests.push(route.request().postDataJSON());
+    requests.push(v.parse(observedRequest, route.request().postDataJSON()));
     if (requests.length === 1) pending = route;
     else
       return route.fulfill({
@@ -116,7 +126,8 @@ test("stop preserves a newer draft and retry sends the failed message once", asy
     page.getByRole("button", { name: "Retry message" }),
   ).toBeVisible();
   await expect(page.getByRole("textbox")).toHaveValue("Newer draft");
-  await pending.abort().catch(() => {});
+  expect(pending).toBeDefined();
+  await pending?.abort().catch(() => {});
   await page.getByRole("button", { name: "Retry message" }).click();
   await expect(
     page.getByRole("button", { name: "Stop", exact: true }),
@@ -130,9 +141,9 @@ test("stop preserves a newer draft and retry sends the failed message once", asy
 test("HTTP failure restores the prompt and leaves failed turns out of history", async ({
   page,
 }) => {
-  const requests = [];
+  const requests: v.InferOutput<typeof observedRequest>[] = [];
   await setup(page, (route) => {
-    requests.push(route.request().postDataJSON());
+    requests.push(v.parse(observedRequest, route.request().postDataJSON()));
     return requests.length === 1
       ? route.fulfill({
           status: 503,
@@ -154,13 +165,13 @@ test("HTTP failure restores the prompt and leaves failed turns out of history", 
 test("remote chat uses JSON, thinking controls, and continuation", async ({
   page,
 }) => {
-  const requests = [];
+  const requests: v.InferOutput<typeof observedRequest>[] = [];
   await setup(page);
   let polls = 0;
-  let id;
+  let id = "";
   await page.route("**/api/chat/jobs", (route) => {
-    requests.push(route.request().postDataJSON());
-    id = requests.at(-1).id;
+    requests.push(v.parse(observedRequest, route.request().postDataJSON()));
+    id = requests.at(-1)?.id || "";
     return route.fulfill({ status: 202, json: { id } });
   });
   await page.route("**/api/chat/jobs/*", (route) => {
@@ -193,7 +204,7 @@ test("remote chat uses JSON, thinking controls, and continuation", async ({
   await expect(page.locator(".assistant .body")).toHaveText("First second");
   expect(requests[0].stream).toBe(false);
   expect(requests[0].max_tokens).toBe(8192);
-  expect(requests[1].chat_template_kwargs.enable_thinking).toBe(false);
+  expect(requests[1].chat_template_kwargs?.enable_thinking).toBe(false);
 });
 
 test("context warning shortens explicitly; excessive prompts never reach the model", async ({
@@ -310,7 +321,7 @@ test("Stop cancels a remote job and preserves the newer draft", async ({
   page,
 }) => {
   await setup(page);
-  let id;
+  let id = "";
   let cancelled = false;
   await page.route("**/api/chat/jobs", (route) => {
     id = route.request().postDataJSON().id;
@@ -346,7 +357,7 @@ test("New chat in one tab prevents an active second tab from restoring cleared t
   await page.goto("/");
   await send(page, "Old conversation");
   const second = await context.newPage();
-  let pending;
+  let pending: Route | undefined;
   await setup(second, (route) => {
     pending = route;
   });
@@ -362,7 +373,8 @@ test("New chat in one tab prevents an active second tab from restoring cleared t
   await expect(
     second.getByRole("button", { name: "Stop", exact: true }),
   ).toBeHidden();
-  await pending.abort().catch(() => {});
+  expect(pending).toBeDefined();
+  await pending?.abort().catch(() => {});
   await second.reload();
   await page.reload();
   await expect(second.locator(".message")).toHaveCount(0);
@@ -374,8 +386,8 @@ test("Stop cancels a remote request before its start acknowledgement arrives", a
   page,
 }) => {
   await setup(page);
-  let pending;
-  let id;
+  let pending: Route | undefined;
+  let id = "";
   let cancelled = false;
   await page.route("**/api/chat/jobs", (route) => {
     pending = route;
@@ -396,5 +408,6 @@ test("Stop cancels a remote request before its start acknowledgement arrives", a
   await expect(
     page.getByRole("button", { name: "Retry message" }),
   ).toBeVisible();
-  await pending.abort().catch(() => {});
+  expect(pending).toBeDefined();
+  await pending?.abort().catch(() => {});
 });

@@ -1,7 +1,10 @@
-import { test } from "node:test";
+import * as v from "valibot";
+import { requestSchema, type Session, type Chunk } from "../contracts.ts";
+import { test, afterEach, vi } from "vitest";
+afterEach(() => vi.restoreAllMocks());
 import assert from "node:assert/strict";
-import { contextUsage, requestChat } from "../chat.js";
-import { clearSession, loadSession, saveSession } from "../session.js";
+import { contextUsage, requestChat } from "../chat.ts";
+import { clearSession, loadSession, saveSession } from "../session.ts";
 
 test("context estimates reserve the chosen output allowance", () => {
   assert.equal(contextUsage([], false).total, 4096);
@@ -13,13 +16,13 @@ test("context estimates reserve the chosen output allowance", () => {
 });
 
 test("saved sessions reject malformed histories and unavailable storage", () => {
-  const values = new Map();
+  const values = new Map<string, string>();
   const storage = {
-    getItem: (key) => values.get(key) ?? null,
-    setItem: (key, value) => values.set(key, value),
-    removeItem: (key) => values.delete(key),
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value),
+    removeItem: (key: string) => values.delete(key),
   };
-  const session = {
+  const session: Session = {
     messages: [
       { role: "user", content: "hello" },
       { role: "assistant", content: "hi", finish: "stop" },
@@ -61,42 +64,38 @@ test("saved sessions reject malformed histories and unavailable storage", () => 
   assert.equal(clearSession(unavailable), false);
 });
 
-test("SSE separators and split multibyte text preserve every event", async (t) => {
+test("SSE separators and split multibyte text preserve every event", async () => {
   for (const separator of ["\n\n", "\r\n\r\n", "\r\n\n", "\n\r\n"]) {
-    await t.test(JSON.stringify(separator), async () => {
-      const payload = new TextEncoder().encode(
-        `data: ${JSON.stringify({ choices: [{ delta: { content: "木" } }] })}${separator}data: ${JSON.stringify({ choices: [{ delta: { content: " second" }, finish_reason: "stop" }] })}${separator}data: [DONE]${separator}`,
-      );
-      t.mock.method(
-        globalThis,
-        "fetch",
-        async () =>
-          new Response(
-            new ReadableStream({
-              start(controller) {
-                for (const byte of payload)
-                  controller.enqueue(new Uint8Array([byte]));
-                controller.close();
-              },
-            }),
-          ),
-      );
-      let content = "";
-      await requestChat([], {
-        stream: true,
-        thinking: false,
-        onChunk: (chunk) => {
-          content += chunk.content || "";
-        },
-      });
-      assert.equal(content, "木 second");
-      t.mock.restoreAll();
+    const payload = new TextEncoder().encode(
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "木" } }] })}${separator}data: ${JSON.stringify({ choices: [{ delta: { content: " second" }, finish_reason: "stop" }] })}${separator}data: [DONE]${separator}`,
+    );
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              for (const byte of payload)
+                controller.enqueue(new Uint8Array([byte]));
+              controller.close();
+            },
+          }),
+        ),
+    );
+    let content = "";
+    await requestChat([], {
+      stream: true,
+      thinking: false,
+      onChunk: (chunk) => {
+        content += chunk.content || "";
+      },
     });
+    assert.equal(content, "木 second");
+    vi.restoreAllMocks();
   }
 });
 
-test("JSON replies preserve reasoning, finish reason, metrics, and request controls", async (t) => {
-  let request;
+test("JSON replies preserve reasoning, finish reason, metrics, and request controls", async () => {
+  let request: v.InferOutput<typeof requestSchema> | undefined;
   const result = {
     choices: [
       {
@@ -106,9 +105,9 @@ test("JSON replies preserve reasoning, finish reason, metrics, and request contr
     ],
     usage: { completion_tokens: 4 },
   };
-  t.mock.method(globalThis, "fetch", async (_, options = {}) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (_, options = {}) => {
     if (options.method === "POST") {
-      request = JSON.parse(options.body);
+      request = v.parse(requestSchema, JSON.parse(String(options.body)));
       return Response.json(
         { id: "00000000000000000000000000000001" },
         { status: 202 },
@@ -117,7 +116,7 @@ test("JSON replies preserve reasoning, finish reason, metrics, and request contr
     if (options.method === "DELETE") return new Response(null, { status: 204 });
     return Response.json({ state: "done", result });
   });
-  let chunk;
+  let chunk: Chunk | undefined;
   await requestChat([{ role: "user", content: "question" }], {
     stream: false,
     thinking: true,
@@ -125,26 +124,30 @@ test("JSON replies preserve reasoning, finish reason, metrics, and request contr
       chunk = value;
     },
   });
+  assert.ok(request);
+  assert.ok(chunk);
   assert.equal(request.stream, false);
   assert.equal(request.max_tokens, 8192);
-  assert.equal(request.chat_template_kwargs.enable_thinking, true);
+  assert.equal(request.chat_template_kwargs?.enable_thinking, true);
   assert.equal(chunk.content, "answer");
   assert.equal(chunk.reasoning_content, "thought");
   assert.equal(chunk.finish, "length");
   assert.deepEqual(chunk.usage, result.usage);
 });
 
-test("truncated, malformed, and server-error replies fail explicitly", async (t) => {
+test("truncated, malformed, and server-error replies fail explicitly", async () => {
   for (const payload of [
     "data: [DONE]\n\n",
     "data: broken\n\n",
     'data: {"error":{"message":"bad"}}\n\n',
   ]) {
-    t.mock.method(globalThis, "fetch", async () => new Response(payload));
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () => new Response(payload),
+    );
     await assert.rejects(requestChat([], { stream: true, onChunk() {} }));
-    t.mock.restoreAll();
+    vi.restoreAllMocks();
   }
-  t.mock.method(globalThis, "fetch", async () =>
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
     Response.json({ error: { message: "offline" } }, { status: 503 }),
   );
   await assert.rejects(
@@ -153,11 +156,9 @@ test("truncated, malformed, and server-error replies fail explicitly", async (t)
   );
 });
 
-test("DONE cancels an open reader rather than waiting forever for EOF", async (t) => {
+test("DONE cancels an open reader rather than waiting forever for EOF", async () => {
   let cancelled = false;
-  t.mock.method(
-    globalThis,
-    "fetch",
+  vi.spyOn(globalThis, "fetch").mockImplementation(
     async () =>
       new Response(
         new ReadableStream({
@@ -178,13 +179,13 @@ test("DONE cancels an open reader rather than waiting forever for EOF", async (t
   assert.equal(cancelled, true);
 });
 
-test("remote polling survives a network failure and a non-JSON gateway response", async (t) => {
+test("remote polling survives a network failure and a non-JSON gateway response", async () => {
   let polls = 0;
   let deleted = 0;
-  t.mock.method(globalThis, "fetch", async (_, options = {}) => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (_, options = {}) => {
     if (options.method === "POST")
       return Response.json(
-        { id: JSON.parse(options.body).id },
+        { id: JSON.parse(String(options.body)).id },
         { status: 202 },
       );
     if (options.method === "DELETE") {
@@ -214,25 +215,28 @@ test("remote polling survives a network failure and a non-JSON gateway response"
   assert.equal(deleted, 1);
 });
 
-test("remote polling stops on expiry and bounds consecutive gateway failures", async (t) => {
+test("remote polling stops on expiry and bounds consecutive gateway failures", async () => {
   for (const status of [404, 502]) {
     let polls = 0;
-    t.mock.method(globalThis, "fetch", async (_, options = {}) => {
-      if (options.method === "POST")
-        return Response.json({ id: JSON.parse(options.body).id });
-      if (options.method === "DELETE")
-        return new Response(null, { status: 204 });
-      polls++;
-      return new Response("unavailable", { status });
-    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (_, options = {}) => {
+        if (options.method === "POST")
+          return Response.json({ id: JSON.parse(String(options.body)).id });
+        if (options.method === "DELETE")
+          return new Response(null, { status: 204 });
+        polls++;
+        return new Response("unavailable", { status });
+      },
+    );
     await assert.rejects(
       requestChat([{ role: "user", content: "hi" }], {
         stream: false,
         onChunk() {},
       }),
-      (error) => error.status === status,
+      (error) =>
+        error instanceof Error && "status" in error && error.status === status,
     );
     assert.equal(polls, status === 404 ? 1 : 3);
-    t.mock.restoreAll();
+    vi.restoreAllMocks();
   }
 });

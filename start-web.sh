@@ -16,14 +16,14 @@ if lsof -nP -iTCP:5173 -sTCP:LISTEN >/dev/null 2>&1; then
     exit 1
 fi
 if [ ! -f "$ROOT/web/dist/index.html" ]; then
-    echo "Build chat first: npm run build --prefix web" >&2
+    echo "Build chat first: bun run --cwd web build" >&2
     exit 1
 fi
 mkdir -p "$ROOT/logs"
 if [ -n "${1:-}" ]; then
-    start_detached "$ROOT/logs/web.log" node "$ROOT/web/server.js" --port 5173
+    start_detached "$ROOT/logs/web.log" bun "$ROOT/web/server.ts" --port 5173
 else
-    node "$ROOT/web/server.js" --port 5173 &
+    bun "$ROOT/web/server.ts" --port 5173 &
     PID=$!
     trap 'kill -TERM "$PID" 2>/dev/null || true' INT TERM
 fi
