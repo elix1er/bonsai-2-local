@@ -13,15 +13,11 @@ test("context estimates reserve the chosen output allowance", () => {
 });
 
 test("saved sessions reject malformed histories and unavailable storage", () => {
-  let value = null;
+  const values = new Map();
   const storage = {
-    getItem: () => value,
-    setItem: (_, data) => {
-      value = data;
-    },
-    removeItem: () => {
-      value = null;
-    },
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: (key) => values.delete(key),
   };
   const session = {
     messages: [
@@ -37,15 +33,18 @@ test("saved sessions reject malformed histories and unavailable storage", () => 
     messages: [session.messages[0], { ...session.messages[1], thought: "" }],
     retryText: "",
   });
-  value = JSON.stringify({
-    ...session,
-    messages: [{ role: "system", content: "bad" }],
-  });
+  values.set(
+    "bonsai-chat-v1",
+    JSON.stringify({
+      ...session,
+      messages: [{ role: "system", content: "bad" }],
+    }),
+  );
   assert.equal(loadSession(storage), null);
-  value = "{";
+  values.set("bonsai-chat-v1", "{");
   assert.equal(loadSession(storage), null);
   assert.equal(clearSession(storage), true);
-  assert.equal(value, null);
+  assert.equal(values.get("bonsai-chat-v1"), undefined);
   const unavailable = {
     getItem() {
       throw Error();
@@ -107,9 +106,16 @@ test("JSON replies preserve reasoning, finish reason, metrics, and request contr
     ],
     usage: { completion_tokens: 4 },
   };
-  t.mock.method(globalThis, "fetch", async (_, options) => {
-    request = JSON.parse(options.body);
-    return Response.json(result);
+  t.mock.method(globalThis, "fetch", async (_, options = {}) => {
+    if (options.method === "POST") {
+      request = JSON.parse(options.body);
+      return Response.json(
+        { id: "00000000000000000000000000000001" },
+        { status: 202 },
+      );
+    }
+    if (options.method === "DELETE") return new Response(null, { status: 204 });
+    return Response.json({ state: "done", result });
   });
   let chunk;
   await requestChat([{ role: "user", content: "question" }], {

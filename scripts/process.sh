@@ -89,7 +89,16 @@ PYTHON
 }
 
 publish_pid() {
-    echo "$PID" > "$PID_FILE"
+    if ! echo "$PID" > "$PID_FILE"; then
+        kill -TERM "$PID" 2>/dev/null || true
+        for ((i=0; i<10; i++)); do
+            if ! process_running; then break; fi
+            sleep 1
+        done
+        if ! process_running; then wait "$PID" 2>/dev/null || true; fi
+        echo "Could not record PID $PID; startup was cancelled. Inspect the process if it remains alive." >&2
+        return 1
+    fi
 }
 
 wait_foreground() {

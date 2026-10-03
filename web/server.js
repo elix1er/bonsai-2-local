@@ -1,4 +1,5 @@
 import http from "node:http";
+import { createJobs, isJobPath } from "./jobs.js";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -13,11 +14,13 @@ const types = {
   ".ico": "image/x-icon",
 };
 
+/** Serve the built frontend and the narrowly allowed chat API on localhost. */
 export function createChatServer({
   root = fileURLToPath(new URL("./dist/", import.meta.url)),
   modelPort = 8080,
 } = {}) {
   root = path.resolve(root);
+  const jobs = createJobs({ modelPort });
 
   /** Proxy only the model routes used by chat, and cancel work when the client leaves. */
   function proxy(req, res, pathname) {
@@ -93,6 +96,14 @@ export function createChatServer({
       res.writeHead(400).end();
       return;
     }
+    if (isJobPath(pathname)) {
+      try {
+        await jobs.handle(req, res, pathname);
+      } catch {
+        if (!res.destroyed && !res.headersSent) res.writeHead(500).end();
+      }
+      return;
+    }
     if (["/api/health", "/api/v1/chat/completions"].includes(pathname)) {
       proxy(req, res, pathname);
       return;
@@ -131,6 +142,7 @@ export function createChatServer({
       else res.writeHead(error.code === "ENOENT" ? 404 : 500).end();
     }
   });
+  server.on("close", () => jobs.close());
   server.requestTimeout = 300000;
   server.timeout = 0;
   return server;

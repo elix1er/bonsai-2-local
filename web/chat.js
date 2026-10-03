@@ -1,4 +1,5 @@
 export const CONTEXT_SIZE = 32768;
+/** Give thinking requests more output space within the fixed context window. */
 export const replyLimit = (thinking) => (thinking ? 8192 : 4096);
 
 /** Reserve output space and allow for chat-template overhead in this estimate. */
@@ -21,34 +22,18 @@ export async function requestChat(
   messages,
   { thinking, stream, signal, onChunk },
 ) {
-  const response = await fetch("/api/v1/chat/completions", {
-    method: "POST",
-    signal,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "bonsai-2-27b",
-      messages,
-      stream,
-      max_tokens: replyLimit(thinking),
-      temperature: thinking ? 1 : 0.7,
-      top_p: thinking ? 0.95 : 0.8,
-      reasoning_effort: thinking ? "medium" : "none",
-      chat_template_kwargs: { enable_thinking: thinking },
-    }),
-  });
-  if (!response.ok) {
-    let message = `Request failed (${response.status})`;
-    try {
-      message = (await response.json()).error?.message || message;
-    } catch {
-      /* Use HTTP status for non-JSON errors. */
-    }
-    throw new Error(message);
-  }
+  const body = {
+    model: "bonsai-2-27b",
+    messages,
+    stream,
+    max_tokens: replyLimit(thinking),
+    temperature: thinking ? 1 : 0.7,
+    top_p: thinking ? 0.95 : 0.8,
+    reasoning_effort: thinking ? "medium" : "none",
+    chat_template_kwargs: { enable_thinking: thinking },
+  };
   if (!stream) {
-    const result = await response.json();
-    if (result.error)
-      throw new Error(result.error.message || "Generation failed");
+    const result = await remoteReply(body, signal);
     const choice = result.choices?.[0];
     if (!choice?.message || !choice.finish_reason)
       throw new Error("The server returned an incomplete reply.");
@@ -60,12 +45,28 @@ export async function requestChat(
     });
     return;
   }
+  const response = await fetch("/api/v1/chat/completions", {
+    method: "POST",
+    signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    let message = `Request failed (${response.status})`;
+    try {
+      message = (await response.json()).error?.message || message;
+    } catch {
+      /* Use HTTP status for non-JSON errors. */
+    }
+    throw new Error(message);
+  }
   if (!response.body) throw new Error("The server returned an empty reply.");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let finished = false;
   let done = false;
+  /** Apply a complete SSE event and distinguish its finish status from transport EOF. */
   function consume(event) {
     const data = event
       .split(/\r?\n/)
@@ -112,5 +113,66 @@ export async function requestChat(
   } finally {
     await reader.cancel().catch(() => {});
     reader.releaseLock();
+  }
+}
+
+/** Start once, poll with short requests, and cancel the job on failure or Stop. */
+async function remoteReply(body, signal) {
+  const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), (value) =>
+    value.toString(16).padStart(2, "0"),
+  ).join("");
+  /** Bound each tunnel request while leaving generation independent of it. */
+  async function json(url, options = {}) {
+    const response = await fetch(url, {
+      ...options,
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(10000)])
+        : AbortSignal.timeout(10000),
+    });
+    let data;
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error(
+        `Request failed (${response.status}). Retry your message.`,
+      );
+    }
+    if (!response.ok)
+      throw new Error(
+        data.error?.message || `Request failed (${response.status})`,
+      );
+    return data;
+  }
+  try {
+    await json("/api/chat/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, id }),
+    });
+    while (true) {
+      const job = await json(`/api/chat/jobs/${id}`);
+      if (job.state === "done") return job.result;
+      if (job.state !== "pending")
+        throw new Error(job.error?.message || "Remote generation failed.");
+      await new Promise((resolve, reject) => {
+        function abort() {
+          clearTimeout(timer);
+          reject(signal.reason);
+        }
+        const timer = setTimeout(() => {
+          signal?.removeEventListener("abort", abort);
+          resolve();
+        }, 1000);
+        if (signal?.aborted) abort();
+        else signal?.addEventListener("abort", abort, { once: true });
+      });
+    }
+  } finally {
+    if (id)
+      fetch(`/api/chat/jobs/${id}`, {
+        method: "DELETE",
+        keepalive: true,
+        signal: AbortSignal.timeout(4000),
+      }).catch(() => {});
   }
 }

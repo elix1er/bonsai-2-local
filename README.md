@@ -24,17 +24,17 @@ Open `http://127.0.0.1:5173`. Setup installs locked dependencies with `npm ci` a
 | Chat | `./start-web.sh -d` | `./stop-web.sh` | `logs/web.log` |
 | Temporary sharing | `./share.sh` | `./stop-share.sh` or Ctrl+C | Terminal |
 
-Without `-d`, chat stays in the terminal and Ctrl+C stops it. The model API listens on `127.0.0.1:8080`. The web server proxies only health and chat completions under `/api`; it serves frontend files from `web/dist/`.
+Without `-d`, chat stays in the terminal and Ctrl+C stops it. The model API listens on `127.0.0.1:8080`. The web server serves frontend files from `web/dist/`, proxies health and chat completions under `/api`, and handles remote reply jobs.
 
-Each service records its PID and uses a control lock to reject overlapping start and stop commands. Stop commands check ownership before signaling and retain the PID if shutdown times out. A PID belonging to another process requires inspection, not deletion or a forced kill.
+Each service records its PID and uses a control lock to reject overlapping start and stop commands. Startup cancels its child if the PID cannot be recorded. Stop commands check ownership before signaling and retain the PID if shutdown times out. A PID belonging to another process requires inspection, not deletion or a forced kill.
 
 If a control command is killed before cleanup, confirm it is no longer running, then remove its leftover directory with `rmdir web-control.lock`, `rmdir server-control.lock`, `rmdir tunnel-control.lock`, or `rmdir setup-control.lock`. Model startup can take three minutes. After a readiness timeout, inspect `logs/server.log`; the PID stays available for `./stop.sh`.
 
 ## Chat behavior
 
-The current conversation, draft, and thinking preference stay in this browser's local storage. Refresh restores them. New chat clears the conversation and draft. Storage is separate for each URL, browser, and profile. If storage is unavailable or full, the app displays a warning. Saved text is not encrypted.
+The current conversation, draft, and thinking preference stay in this browser's local storage. Refresh restores them. New chat clears the conversation and draft across tabs using the same URL. It also stops a reply in another tab before that tab can restore cleared text. Storage is separate for each URL, browser, and profile. If storage is unavailable or full, the app displays a warning. Saved text is not encrypted.
 
-Local replies stream. Remote replies arrive as completed JSON responses. Both support thinking, Stop, and continuation after the reply limit. Interrupted partial answers remain available to continue. Only the latest answer can be extended, so earlier exchanges stay consistent.
+Local replies stream. Remote chat starts a reply job and polls until its completed JSON answer is available. Both support thinking, Stop, and continuation after the reply limit. Interrupted partial answers remain available to continue. Only the latest answer can be extended, so earlier exchanges stay consistent.
 
 A failed or stopped unanswered request can be retried. Its prompt returns to an empty composer; a newer draft stays intact. Copy answer and Copy code buttons copy plain text. Markdown is sanitized before rendering.
 
@@ -75,13 +75,13 @@ For streaming, add `"stream": true` and use `curl -N`. For reasoning, set `"reas
 
 Place a Cloudflare `cloudflared` executable at `bin/cloudflared`. Setup does not install it. Start the model and chat, then run `./share.sh`. Keep the terminal open and use the printed URL.
 
-The URL exposes chat and the two proxied model endpoints publicly without authentication. Anyone with it can use your model. Stop sharing when the test ends.
+The URL exposes chat, reply jobs, and the two proxied model endpoints publicly without authentication. Anyone with it can use your model. Stop sharing when the test ends.
 
-[Cloudflare Quick Tunnels do not support SSE](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/#limitations). The UI therefore uses completed JSON replies on remote hostnames, with a waiting indicator until the answer arrives. This is temporary sharing, not a persistent or authenticated hosting setup.
+[Cloudflare Quick Tunnels do not support SSE](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/#limitations). The UI therefore starts a reply job on remote hostnames and polls it with short requests. This also avoids [Cloudflare's response timeout for long origin requests](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-524/). A waiting indicator stays visible until the complete answer arrives. One remote reply can run at a time. Stop cancels its model request. Jobs stay in memory, have a 20-minute generation limit, and expire 10 minutes after completion. Restarting chat loses pending jobs. This is temporary sharing, not a persistent or authenticated hosting setup.
 
 ## Develop and check
 
-The frontend stays vanilla JavaScript. `web/src.js` handles UI interactions, `web/chat.js` handles requests and streaming, and `web/session.js` handles saved data. `web/server.js` serves the build and proxies the model. Launchers share PID, lock, and shutdown handling through `scripts/process.sh`.
+The frontend stays vanilla JavaScript. `web/src.js` handles UI interactions, `web/chat.js` handles requests and streaming, and `web/session.js` handles saved data. `web/server.js` serves the build and proxies the model. `web/jobs.js` handles bounded remote jobs and cancellation for both normal and development servers. Launchers share PID, lock, and shutdown handling through `scripts/process.sh`.
 
 For frontend development, `npm run dev --prefix web` starts Vite on port 5173 with the same API proxy. Stop the built chat server first. Rebuild before using the normal launcher again.
 

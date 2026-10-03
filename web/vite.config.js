@@ -1,6 +1,26 @@
 import { defineConfig } from "vite";
+import { createJobs, isJobPath } from "./jobs.js";
 
 export default defineConfig({
+  plugins: [
+    {
+      name: "remote-chat-jobs",
+      configureServer(server) {
+        const jobs = createJobs({ modelPort: 8080 });
+        server.middlewares.use((req, res, next) => {
+          const pathname = new URL(req.url, "http://localhost").pathname;
+          if (!isJobPath(pathname)) {
+            next();
+            return;
+          }
+          jobs.handle(req, res, pathname).catch(() => {
+            if (!res.headersSent) res.writeHead(500).end();
+          });
+        });
+        server.httpServer?.on("close", () => jobs.close());
+      },
+    },
+  ],
   server: {
     proxy: {
       "^/api/(health|v1/chat/completions)$": {

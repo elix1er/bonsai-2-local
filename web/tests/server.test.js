@@ -1,18 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import { randomBytes } from "node:crypto";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { once } from "node:events";
 import { createChatServer } from "../server.js";
+import { createJobs } from "../jobs.js";
 
+/** Use an ephemeral localhost port so server fixtures cannot collide with live services. */
 async function listen(server) {
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   return server.address().port;
 }
 
+/** Close pooled connections as well as the listener during fixture cleanup. */
 function close(server) {
   server.closeAllConnections();
   return new Promise((resolve) => server.close(resolve));
@@ -130,4 +134,130 @@ test("disconnecting a streaming client closes the model request", async (t) => {
       timer.unref();
     }),
   ]);
+});
+
+test("remote jobs acknowledge promptly, stay pollable, reject overlap, and cancel model work", async (t) => {
+  let finish;
+  let disconnected;
+  let submitted;
+  let call = 0;
+  let secondSubmitted;
+  const secondStarted = new Promise((resolve) => {
+    secondSubmitted = resolve;
+  });
+  const started = new Promise((resolve) => {
+    submitted = resolve;
+  });
+  const stopped = new Promise((resolve) => {
+    disconnected = resolve;
+  });
+  const model = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const request = JSON.parse(Buffer.concat(chunks).toString());
+    assert.equal(request.stream, false);
+    assert.equal(request.id, undefined);
+    call++;
+    if (call === 2) {
+      secondSubmitted();
+      res.on("close", disconnected);
+    }
+    finish = () =>
+      res.end(
+        '{"choices":[{"message":{"content":"remote"},"finish_reason":"stop"}]}',
+      );
+    submitted();
+  });
+  const server = createChatServer({ modelPort: await listen(model) });
+  const base = `http://127.0.0.1:${await listen(server)}`;
+  t.after(async () => {
+    await close(server);
+    await close(model);
+  });
+  const post = () =>
+    fetch(`${base}/api/chat/jobs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: randomBytes(16).toString("hex"),
+        messages: [{ role: "user", content: "hi" }],
+        stream: true,
+      }),
+    });
+  const first = await post();
+  assert.equal(first.status, 202);
+  const { id } = await first.json();
+  await started;
+  const url = `${base}/api/chat/jobs/${id}`;
+  assert.equal((await (await fetch(url)).json()).state, "pending");
+  assert.equal((await post()).status, 429);
+  finish();
+  let job;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    job = await (await fetch(url)).json();
+    if (job.state === "done") break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(job.result.choices[0].message.content, "remote");
+  assert.equal((await fetch(url, { method: "DELETE" })).status, 204);
+  assert.equal((await fetch(url)).status, 404);
+  const second = await (await post()).json();
+  await secondStarted;
+  assert.equal(
+    (await fetch(`${base}/api/chat/jobs/${second.id}`, { method: "DELETE" }))
+      .status,
+    204,
+  );
+  await Promise.race([
+    stopped,
+    new Promise((_, reject) => {
+      const timer = setTimeout(
+        () => reject(Error("Remote model did not stop")),
+        2000,
+      );
+      timer.unref();
+    }),
+  ]);
+});
+
+test("remote jobs validate IDs, stop at their deadline, and expire completed state", async (t) => {
+  const model = http.createServer((req) => req.resume());
+  const jobs = createJobs({
+    modelPort: await listen(model),
+    deadlineMs: 100,
+    retentionMs: 1000,
+  });
+  const server = http.createServer((req, res) =>
+    jobs.handle(req, res, req.url),
+  );
+  const base = `http://127.0.0.1:${await listen(server)}`;
+  t.after(async () => {
+    jobs.close();
+    await close(server);
+    await close(model);
+  });
+  const post = (id) =>
+    fetch(`${base}/api/chat/jobs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, messages: [{ role: "user", content: "hi" }] }),
+    });
+  assert.equal((await post("invalid")).status, 400);
+  const id = randomBytes(16).toString("hex");
+  assert.equal((await post(id)).status, 202);
+  let job;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    job = await (await fetch(`${base}/api/chat/jobs/${id}`)).json();
+    if (job.state === "error") break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(job.state, "error");
+  assert.match(job.error.message, /time limit/);
+  let status;
+  for (let attempt = 0; attempt < 150; attempt++) {
+    status = (await fetch(`${base}/api/chat/jobs/${id}`)).status;
+    if (status === 404) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(status, 404);
 });

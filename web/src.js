@@ -3,7 +3,13 @@ import DOMPurify from "dompurify";
 import "./style.css";
 import treeUrl from "../assets/tree.svg";
 import { CONTEXT_SIZE, contextUsage, requestChat } from "./chat.js";
-import { loadSession, saveSession, clearSession } from "./session.js";
+import {
+  loadSession,
+  saveSession,
+  clearSession,
+  sessionIsCurrent,
+  RESET_KEY,
+} from "./session.js";
 
 const remote = !["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
 const idleText = remote
@@ -67,10 +73,16 @@ let messages = saved?.messages || [];
 let controller = null;
 let retryText = saved?.retryText || "";
 let saveTimer;
+let sessionGeneration = 0;
 prompt.value = saved?.draft || "";
 $("#thinking").checked = saved?.thinking || false;
 
+/** Save one browser session and report quota or access failures. */
 function persist() {
+  if (!sessionIsCurrent()) {
+    resetOtherTab();
+    return;
+  }
   clearTimeout(saveTimer);
   const ok = saveSession({
     messages,
@@ -83,16 +95,19 @@ function persist() {
     "Browser storage is unavailable or full. This chat will be lost on refresh.";
 }
 
+/** Batch streamed updates and typing instead of writing storage for every chunk. */
 function scheduleSave() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(persist, 250);
 }
 
+/** Grow the composer to 180 pixels, then let its text scroll. */
 function resize() {
   prompt.style.height = "auto";
   prompt.style.height = `${Math.min(prompt.scrollHeight, 180)}px`;
 }
 
+/** Reserve reply space and offer explicit removal of older exchanges. */
 function updateContext() {
   const usage = contextUsage(
     [...messages, { content: prompt.value }],
@@ -105,10 +120,12 @@ function updateContext() {
   $("#shorten").disabled = !!controller || messages.length <= 2;
 }
 
+/** Follow the answer only when the caller decides the reader is near the bottom. */
 function scroll() {
   window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
 }
 
+/** Report clipboard permission failures without discarding the displayed text. */
 async function copy(button, text) {
   try {
     await navigator.clipboard.writeText(text);
@@ -121,6 +138,7 @@ async function copy(button, text) {
   }, 1500);
 }
 
+/** Resolve text at click time so appended answers copy their latest content. */
 function copyButton(label, text) {
   const button = document.createElement("button");
   button.type = "button";
@@ -130,6 +148,7 @@ function copyButton(label, text) {
   return button;
 }
 
+/** Sanitize generated HTML and attach code-copy controls after generation ends. */
 function markdown(node, text, complete) {
   node.innerHTML = DOMPurify.sanitize(marked.parse(text));
   if (complete)
@@ -172,6 +191,7 @@ function bubble(message) {
   return { article, body, details, summary, thought, stats, actions };
 }
 
+/** Render content, reasoning, and metrics for the latest request on an answer. */
 function renderAnswer(view, message, live = false, elapsed = 0) {
   view.details.hidden = !message.thought;
   view.thought.textContent = message.thought || "";
@@ -245,6 +265,7 @@ function renderAnswer(view, message, live = false, elapsed = 0) {
   }
 }
 
+/** Retry the unanswered prompt while preserving a separately typed draft. */
 function renderRetry(view, text, stopped = false) {
   view.body.textContent = stopped
     ? "Stopped before an answer arrived."
@@ -258,6 +279,7 @@ function renderRetry(view, text, stopped = false) {
   view.actions.append(retry);
 }
 
+/** Rebuild saved messages and the unanswered prompt, with continuation on the last answer. */
 function renderConversation() {
   $("#messages").replaceChildren();
   $("#welcome").hidden = !!(messages.length || retryText);
@@ -276,6 +298,7 @@ function renderConversation() {
   return lastView;
 }
 
+/** Allow one request at a time while keeping Stop and draft editing available. */
 function setBusy(busy) {
   $("#send").hidden = busy;
   $("#stop").hidden = !busy;
@@ -287,6 +310,7 @@ function setBusy(busy) {
   });
 }
 
+/** Refresh the readiness badge without changing the conversation. */
 async function health() {
   try {
     const response = await fetch("/api/health", {
@@ -310,6 +334,7 @@ async function runChat(request, message, view, continuation = false) {
       "Chat too long. Shorten it or start a new chat.";
     return;
   }
+  const generation = sessionGeneration;
   controller = new AbortController();
   setBusy(true);
   message.finish = "interrupted";
@@ -331,6 +356,7 @@ async function runChat(request, message, view, continuation = false) {
       stream: !remote,
       signal: controller.signal,
       onChunk(chunk) {
+        if (generation !== sessionGeneration) return;
         generatedCharacters +=
           (chunk.content || "").length + (chunk.reasoning_content || "").length;
         message.estimatedTokens = Math.ceil(generatedCharacters / 3);
@@ -348,6 +374,7 @@ async function runChat(request, message, view, continuation = false) {
         if (nearBottom) scroll();
       },
     });
+    if (generation !== sessionGeneration) return;
     if (!message.content && !message.thought)
       throw new Error("The model returned an empty answer.");
     $("#activity").textContent =
@@ -357,6 +384,7 @@ async function runChat(request, message, view, continuation = false) {
     $("#connection").textContent = readyText;
     $("#connection").className = "online";
   } catch (error) {
+    if (generation !== sessionGeneration) return;
     message.finish = "interrupted";
     if (!message.content && !continuation) {
       messages.splice(-2);
@@ -389,6 +417,7 @@ async function runChat(request, message, view, continuation = false) {
   }
 }
 
+/** Send text-only model history and retain the chosen draft during retries. */
 function submitText(text, preserveDraft = false) {
   if (!text || controller) return;
   const request = [
@@ -445,6 +474,7 @@ $("#clear").onclick = () => {
   retryText = "";
   prompt.value = "";
   clearSession();
+  sessionGeneration++;
   renderConversation();
   resize();
   persist();
@@ -494,4 +524,21 @@ window.addEventListener("focus", health);
 window.addEventListener("pagehide", () => {
   controller?.abort();
   persist();
+});
+
+/** Apply New chat across tabs and abort a reply belonging to the cleared session. */
+function resetOtherTab() {
+  clearTimeout(saveTimer);
+  sessionGeneration++;
+  controller?.abort();
+  messages = [];
+  retryText = "";
+  prompt.value = "";
+  loadSession();
+  renderConversation();
+  resize();
+  $("#activity").textContent = "Chat cleared in another tab.";
+}
+window.addEventListener("storage", (event) => {
+  if (event.key === RESET_KEY) resetOtherTab();
 });

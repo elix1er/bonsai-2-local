@@ -3,6 +3,7 @@ export default defineConfig({
   testDir: "./tests",
   testMatch: "*.spec.js",
   fullyParallel: true,
+  workers: 2,
   use: {
     baseURL: "http://127.0.0.1:5187",
     browserName: "chromium",

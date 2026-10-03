@@ -1,9 +1,11 @@
 import { test, expect } from "@playwright/test";
 
+/** Return a deterministic model event with final timing metadata. */
 function stream(content = "First", finish = "stop") {
   return `data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: finish }], timings: { prompt_n: 7, predicted_n: 2, predicted_per_second: 20 } })}\r\n\r\ndata: [DONE]\r\n\r\n`;
 }
 
+/** Intercept model traffic so browser checks never consume real inference resources. */
 async function setup(page, handler) {
   await page.route("**/api/health", (route) =>
     route.fulfill({ json: { status: "ok" } }),
@@ -16,6 +18,7 @@ async function setup(page, handler) {
   );
 }
 
+/** Submit through visible controls and wait for completion rather than a fixed delay. */
 async function send(page, text) {
   await page.getByRole("textbox", { name: "Message Bonsai" }).fill(text);
   await page.getByRole("button", { name: "Send message" }).click();
@@ -152,19 +155,33 @@ test("remote chat uses JSON, thinking controls, and continuation", async ({
   page,
 }) => {
   const requests = [];
-  await setup(page, (route) => {
+  await setup(page);
+  let polls = 0;
+  let id;
+  await page.route("**/api/chat/jobs", (route) => {
     requests.push(route.request().postDataJSON());
+    id = requests.at(-1).id;
+    return route.fulfill({ status: 202, json: { id } });
+  });
+  await page.route("**/api/chat/jobs/*", (route) => {
+    if (route.request().method() === "DELETE")
+      return route.fulfill({ status: 204 });
+    polls++;
+    if (polls === 1) return route.fulfill({ json: { state: "pending" } });
     return route.fulfill({
       json: {
-        choices: [
-          {
-            message: {
-              content: requests.length === 1 ? "First" : " second",
-              reasoning_content: "A thought",
+        state: "done",
+        result: {
+          choices: [
+            {
+              message: {
+                content: requests.length === 1 ? "First" : " second",
+                reasoning_content: "A thought",
+              },
+              finish_reason: requests.length === 1 ? "length" : "stop",
             },
-            finish_reason: requests.length === 1 ? "length" : "stop",
-          },
-        ],
+          ],
+        },
       },
     });
   });
@@ -287,4 +304,68 @@ test("model health recovers on focus, and composer has visible keyboard focus", 
       .getByRole("textbox")
       .evaluate((element) => getComputedStyle(element).outlineStyle),
   ).toBe("solid");
+});
+
+test("Stop cancels a remote job and preserves the newer draft", async ({
+  page,
+}) => {
+  await setup(page);
+  let id;
+  let cancelled = false;
+  await page.route("**/api/chat/jobs", (route) => {
+    id = route.request().postDataJSON().id;
+    return route.fulfill({ status: 202, json: { id } });
+  });
+  await page.route("**/api/chat/jobs/*", (route) => {
+    if (route.request().method() === "DELETE") {
+      cancelled = true;
+      return route.fulfill({ status: 204 });
+    }
+    return route.fulfill({ json: { state: "pending" } });
+  });
+  await page.goto("http://bonsai.test:5187");
+  await page.getByRole("textbox").fill("Remote pending");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(
+    page.getByRole("button", { name: "Stop", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("textbox").fill("Newer draft");
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Retry message" }),
+  ).toBeVisible();
+  await expect(page.getByRole("textbox")).toHaveValue("Newer draft");
+  await expect.poll(() => cancelled).toBe(true);
+});
+
+test("New chat in one tab prevents an active second tab from restoring cleared text", async ({
+  page,
+  context,
+}) => {
+  await setup(page);
+  await page.goto("/");
+  await send(page, "Old conversation");
+  const second = await context.newPage();
+  let pending;
+  await setup(second, (route) => {
+    pending = route;
+  });
+  await second.goto("/");
+  await second.getByRole("textbox").fill("In-flight question");
+  await second.getByRole("button", { name: "Send message" }).click();
+  await expect(
+    second.getByRole("button", { name: "Stop", exact: true }),
+  ).toBeVisible();
+  await second.getByRole("textbox").fill("Draft in the other tab");
+  await page.getByRole("button", { name: "New chat" }).click();
+  await expect(second.locator(".message")).toHaveCount(0);
+  await expect(
+    second.getByRole("button", { name: "Stop", exact: true }),
+  ).toBeHidden();
+  await pending.abort().catch(() => {});
+  await second.reload();
+  await page.reload();
+  await expect(second.locator(".message")).toHaveCount(0);
+  await expect(page.locator(".message")).toHaveCount(0);
+  await expect(second.getByRole("textbox")).toHaveValue("");
 });

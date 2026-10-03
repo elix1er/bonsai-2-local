@@ -127,6 +127,23 @@ class ProcessControlTests(unittest.TestCase):
                     self.assertEqual((root / f'{service}.pid').read_text(), '4242')
                     self.assertTrue((root / f'{service}-control.lock').exists())
 
+    def test_pid_publication_failure_stops_the_started_process(self):
+        """Cancel startup when the shutdown record cannot be written."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            blocked = root / 'web.pid'
+            blocked.mkdir()
+            process = subprocess.Popen(['node', '-e', 'setInterval(() => {}, 1000)'])
+            try:
+                result = subprocess.run(['bash', '-c', 'source "$1"; PID="$2"; PID_FILE="$3"; publish_pid', 'fixture', str(ROOT / 'scripts/process.sh'), str(process.pid), str(blocked)], capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 1)
+                process.wait(timeout=3)
+                self.assertIn(b'startup was cancelled', result.stderr)
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait()
+
     def test_shutdown_states(self):
         """Check zombies, delayed exit, and timeout without signaling live services."""
         for script, pidfile in [('stop-web.sh', 'web.pid'), ('stop-share.sh', 'tunnel.pid'), ('stop.sh', 'server.pid')]:
