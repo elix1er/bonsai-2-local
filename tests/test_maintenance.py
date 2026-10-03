@@ -21,6 +21,8 @@ class ProcessControlTests(unittest.TestCase):
         """Reject PID files pointing to unrelated live processes."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / 'scripts').mkdir()
+            shutil.copy(ROOT / 'scripts/process.sh', root / 'scripts/process.sh')
             process = subprocess.Popen(['sleep', '60'])
             try:
                 for script, pidfile in [('stop-web.sh', 'web.pid'),
@@ -40,11 +42,16 @@ class ProcessControlTests(unittest.TestCase):
         """Start a detached web fixture, reuse its PID, and confirm shutdown."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / 'scripts').mkdir()
+            shutil.copy(ROOT / 'scripts/process.sh', root / 'scripts/process.sh')
             with socket.socket() as listener:
                 listener.bind(('127.0.0.1', 0))
                 port = listener.getsockname()[1]
-            vite = root / 'web/node_modules/vite/bin/vite.js'
+            (root / 'scripts/process.sh').write_text((ROOT / 'scripts/process.sh').read_text().replace('5173', str(port)))
+            vite = root / 'web/server.js'
             vite.parent.mkdir(parents=True)
+            (root / 'web/dist').mkdir()
+            (root / 'web/dist/index.html').write_text('fixture')
             vite.write_text("require('http').createServer((req,res)=>res.end('ready')).listen(Number(process.argv[process.argv.indexOf('--port')+1]),'127.0.0.1');")
             for script in ['start-web.sh', 'stop-web.sh']:
                 (root / script).write_text((ROOT / script).read_text().replace('5173', str(port)))
@@ -67,11 +74,16 @@ class ProcessControlTests(unittest.TestCase):
         """Keep foreground chat stoppable after startup releases its control lock."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / 'scripts').mkdir()
+            shutil.copy(ROOT / 'scripts/process.sh', root / 'scripts/process.sh')
             with socket.socket() as listener:
                 listener.bind(('127.0.0.1', 0))
                 port = listener.getsockname()[1]
-            vite = root / 'web/node_modules/vite/bin/vite.js'
+            (root / 'scripts/process.sh').write_text((ROOT / 'scripts/process.sh').read_text().replace('5173', str(port)))
+            vite = root / 'web/server.js'
             vite.parent.mkdir(parents=True)
+            (root / 'web/dist').mkdir()
+            (root / 'web/dist/index.html').write_text('fixture')
             vite.write_text("require('http').createServer((req,res)=>res.end('ready')).listen(Number(process.argv[process.argv.indexOf('--port')+1]),'127.0.0.1');")
             for script in ['start-web.sh', 'stop-web.sh']:
                 (root / script).write_text((ROOT / script).read_text().replace('5173', str(port)))
@@ -96,32 +108,40 @@ class ProcessControlTests(unittest.TestCase):
                     process.terminate()
                     process.wait(timeout=5)
 
-    def test_overlapping_web_commands_are_rejected(self):
-        """Preserve the PID record when another web control command owns the lock."""
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / 'web-control.lock').mkdir()
-            (root / 'web.pid').write_text('4242')
-            for script in ['start-web.sh', 'stop-web.sh']:
-                shutil.copy(ROOT / script, root / script)
-                result = subprocess.run(['bash', str(root / script), '-d'], capture_output=True)
-                self.assertEqual(result.returncode, 1, result.stderr)
-                self.assertIn(b'Another web control command', result.stderr)
-                self.assertEqual((root / 'web.pid').read_text(), '4242')
-                self.assertTrue((root / 'web-control.lock').exists())
+    def test_overlapping_commands_are_rejected(self):
+        """Every service rejects overlapping control commands without replacing its PID."""
+        for service, scripts in [('web', ['start-web.sh', 'stop-web.sh']),
+                                 ('server', ['start.sh', 'stop.sh']),
+                                 ('tunnel', ['share.sh', 'stop-share.sh'])]:
+            with self.subTest(service=service), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'scripts').mkdir()
+                shutil.copy(ROOT / 'scripts/process.sh', root / 'scripts/process.sh')
+                (root / f'{service}-control.lock').mkdir()
+                (root / f'{service}.pid').write_text('4242')
+                for script in scripts:
+                    shutil.copy(ROOT / script, root / script)
+                    result = subprocess.run(['bash', str(root / script)], capture_output=True)
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertIn(f'Another {service} control command'.encode(), result.stderr)
+                    self.assertEqual((root / f'{service}.pid').read_text(), '4242')
+                    self.assertTrue((root / f'{service}-control.lock').exists())
 
     def test_shutdown_states(self):
         """Check zombies, delayed exit, and timeout without signaling live services."""
-        for script, pidfile in [('stop-web.sh', 'web.pid'), ('stop-share.sh', 'tunnel.pid')]:
+        for script, pidfile in [('stop-web.sh', 'web.pid'), ('stop-share.sh', 'tunnel.pid'), ('stop.sh', 'server.pid')]:
             for mode in ['zombie', 'delayed', 'timeout']:
                 with self.subTest(script=script, mode=mode), tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
+                    (root / 'scripts').mkdir()
+                    shutil.copy(ROOT / 'scripts/process.sh', root / 'scripts/process.sh')
                     commands = root / 'commands'
                     commands.mkdir()
                     (root / script).write_text((ROOT / script).read_text())
                     (root / pidfile).write_text('4242')
-                    command = (f'node {root}/web/node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort'
-                               if script == 'stop-web.sh' else f'{root}/bin/cloudflared tunnel --url fixture')
+                    command = (f'node {root}/web/server.js --port 5173'
+                               if script == 'stop-web.sh' else f'{root}/bin/cloudflared tunnel --url fixture'
+                               if script == 'stop-share.sh' else f'{root}/runtime/bin/mac/llama-server --model fixture')
                     (commands / 'ps').write_text(f"#!/bin/bash\nif [ \"$4\" = stat= ]; then\n"
                                                 f" if [ '{mode}' = zombie ]; then echo Z; "
                                                 f"elif [ '{mode}' = delayed ] && [ -f '{root}/slept' ]; then exit 1; "
@@ -141,6 +161,8 @@ class ProcessControlTests(unittest.TestCase):
         """Remove records for processes that have already exited."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / 'scripts').mkdir()
+            shutil.copy(ROOT / 'scripts/process.sh', root / 'scripts/process.sh')
             process = subprocess.Popen(['true'])
             process.wait()
             for script, pidfile in [('stop-web.sh', 'web.pid'),
@@ -151,6 +173,50 @@ class ProcessControlTests(unittest.TestCase):
                 result = subprocess.run(['bash', str(root / script)], capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertFalse((root / pidfile).exists())
+
+
+class SetupTests(unittest.TestCase):
+    def test_unsupported_platform_stops_before_downloads(self):
+        """Reject unsupported systems before invoking any installation step."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copy(ROOT / 'setup.sh', root / 'setup.sh')
+            (root / 'uname').write_text('#!/bin/bash\necho Linux\n')
+            (root / 'uname').chmod(0o755)
+            env = dict(os.environ, PATH=f'{root}:{os.environ["PATH"]}')
+            result = subprocess.run(['bash', str(root / 'setup.sh')], env=env, capture_output=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(b'requires macOS on Apple Silicon', result.stderr)
+            self.assertFalse((root / 'runtime').exists())
+
+    def test_missing_prerequisite_stops_before_downloads(self):
+        """Report missing npm before fetching the model or runtime."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copy(ROOT / 'setup.sh', root / 'setup.sh')
+            for tool in ['dirname', 'python3', 'node']:
+                (root / tool).symlink_to(shutil.which(tool))
+            (root / 'uname').write_text('#!/bin/bash\nif [ "$1" = -s ]; then echo Darwin; else echo arm64; fi\n')
+            (root / 'uname').chmod(0o755)
+            result = subprocess.run(['/bin/bash', str(root / 'setup.sh')], env=dict(os.environ, PATH=str(root)), capture_output=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(b'Missing prerequisite: npm', result.stderr)
+            self.assertFalse((root / 'runtime').exists())
+
+    def test_wrong_runtime_is_rejected_without_replacing_it(self):
+        """Leave an existing incompatible runtime intact and explain the mismatch."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'scripts').mkdir()
+            shutil.copy(ROOT / 'scripts/download_runtime.sh', root / 'scripts/download_runtime.sh')
+            binary = root / 'runtime/bin/mac/llama-server'
+            binary.parent.mkdir(parents=True)
+            binary.write_text('#!/bin/bash\necho "version: wrong build"\n')
+            binary.chmod(0o755)
+            result = subprocess.run(['bash', str(root / 'scripts/download_runtime.sh')], capture_output=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(b'does not match prism-b10709-9a9394a', result.stderr)
+            self.assertTrue(binary.exists())
 
 
 class DownloadTests(unittest.TestCase):

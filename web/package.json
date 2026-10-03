@@ -1,1 +1,26 @@
-{"name":"bonsai-chat","private":true,"version":"1.0.0","type":"module","scripts":{"dev":"vite --host 127.0.0.1 --port 5173 --strictPort","build":"vite build"},"devDependencies":{"vite":"latest"},"dependencies":{"marked":"latest","dompurify":"latest"}}
+{
+  "name": "bonsai-chat",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "build": "vite build",
+    "start": "node server.js",
+    "test": "node --test tests/*.test.js && playwright test",
+    "format": "prettier --write *.js *.css *.html tests/*.js",
+    "format:check": "prettier --check *.js *.css *.html tests/*.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "prettier": "3.9.9",
+    "vite": "8.3.0"
+  },
+  "dependencies": {
+    "dompurify": "3.4.16",
+    "marked": "18.0.14"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  }
+}
