@@ -27,6 +27,11 @@ if shutil.disk_usage(root).free < required:
     sys.exit(f"Setup needs at least {required // 1024**3} GiB of free disk space.")
 PYTHON
 
+SERVICE=setup
+# shellcheck source=scripts/process.sh
+source "$ROOT/scripts/process.sh"
+acquire_lock
+
 chmod +x "$ROOT/scripts/download_runtime.sh"
 "$ROOT/scripts/download_runtime.sh"
 

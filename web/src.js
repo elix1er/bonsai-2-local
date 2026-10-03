@@ -260,7 +260,7 @@ function renderRetry(view, text, stopped = false) {
 
 function renderConversation() {
   $("#messages").replaceChildren();
-  $("#welcome").hidden = !!messages.length;
+  $("#welcome").hidden = !!(messages.length || retryText);
   let lastView;
   for (const message of messages) {
     lastView = bubble(message);

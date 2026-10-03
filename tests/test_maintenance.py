@@ -203,6 +203,27 @@ class SetupTests(unittest.TestCase):
             self.assertIn(b'Missing prerequisite: npm', result.stderr)
             self.assertFalse((root / 'runtime').exists())
 
+    def test_overlapping_setup_is_rejected(self):
+        """Reject a second setup before downloads or dependency replacement."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'scripts').mkdir()
+            shutil.copy(ROOT / 'setup.sh', root / 'setup.sh')
+            shutil.copy(ROOT / 'scripts/process.sh', root / 'scripts/process.sh')
+            (root / 'setup-control.lock').mkdir()
+            commands = root / 'commands'
+            commands.mkdir()
+            for tool in ['python3', 'node', 'npm', 'curl', 'tar', 'xattr', 'codesign', 'lsof']:
+                (commands / tool).write_text('#!/bin/bash\nexit 0\n')
+                (commands / tool).chmod(0o755)
+            (commands / 'uname').write_text('#!/bin/bash\nif [ "$1" = -s ]; then echo Darwin; else echo arm64; fi\n')
+            (commands / 'uname').chmod(0o755)
+            result = subprocess.run(['bash', str(root / 'setup.sh')], env=dict(os.environ, PATH=f'{commands}:{os.environ["PATH"]}'), capture_output=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(b'Another setup control command', result.stderr)
+            self.assertFalse((root / 'runtime').exists())
+            self.assertTrue((root / 'setup-control.lock').exists())
+
     def test_wrong_runtime_is_rejected_without_replacing_it(self):
         """Leave an existing incompatible runtime intact and explain the mismatch."""
         with tempfile.TemporaryDirectory() as directory:

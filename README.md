@@ -6,7 +6,7 @@ Local chat with Ternary Bonsai 2 27B on Apple Silicon, using the matching Prism 
 
 ## Run chat
 
-Requires macOS on Apple Silicon, Python 3, npm, and Node 20.19+ or 22.12+. Node 21 is unsupported. A fresh setup needs 12 GiB of free disk space. Setup checks these prerequisites before downloading anything.
+Requires macOS on Apple Silicon, Python 3, npm, and Node 20.19+ or 22.12+. Node 21 is unsupported. A fresh setup needs 12 GiB of free disk space. Setup checks these prerequisites before downloading anything and rejects overlapping setup runs.
 
 ```bash
 git clone https://github.com/elix1er/bonsai-2-local.git
@@ -28,7 +28,7 @@ Without `-d`, chat stays in the terminal and Ctrl+C stops it. The model API list
 
 Each service records its PID and uses a control lock to reject overlapping start and stop commands. Stop commands check ownership before signaling and retain the PID if shutdown times out. A PID belonging to another process requires inspection, not deletion or a forced kill.
 
-If a control command is killed before cleanup, confirm it is no longer running, then remove its leftover directory with `rmdir web-control.lock`, `rmdir server-control.lock`, or `rmdir tunnel-control.lock`. Model startup can take three minutes. After a readiness timeout, inspect `logs/server.log`; the PID stays available for `./stop.sh`.
+If a control command is killed before cleanup, confirm it is no longer running, then remove its leftover directory with `rmdir web-control.lock`, `rmdir server-control.lock`, `rmdir tunnel-control.lock`, or `rmdir setup-control.lock`. Model startup can take three minutes. After a readiness timeout, inspect `logs/server.log`; the PID stays available for `./stop.sh`.
 
 ## Chat behavior
 

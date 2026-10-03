@@ -41,5 +41,9 @@ if [ -d "$DEST" ]; then
         exit 1
     fi
 fi
-mv "$STAGE" "$DEST"
+python3 - "$STAGE" "$DEST" <<'PYTHON'
+import os
+import sys
+os.rename(sys.argv[1], sys.argv[2])
+PYTHON
 echo "Runtime installed and verified: $DEST."
