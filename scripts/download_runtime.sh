@@ -22,13 +22,7 @@ trap 'rm -f "$TMP"; rm -rf "$STAGE"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 curl -fL --progress-bar "$URL" -o "$TMP"
-python3 - "$TMP" "$SHA256" <<'PYTHON'
-import hashlib
-import pathlib
-import sys
-if hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest() != sys.argv[2]:
-    sys.exit('Runtime archive checksum mismatch; refusing to extract it.')
-PYTHON
+bun "$ROOT/scripts/hash.ts" "$TMP" "$SHA256"
 tar -xzf "$TMP" -C "$STAGE" --strip-components=1
 xattr -cr "$STAGE"
 for binary in "$STAGE"/llama-*; do
@@ -41,9 +35,5 @@ if [ -d "$DEST" ]; then
         exit 1
     fi
 fi
-python3 - "$STAGE" "$DEST" <<'PYTHON'
-import os
-import sys
-os.rename(sys.argv[1], sys.argv[2])
-PYTHON
+bun -e 'import { rename } from "node:fs/promises"; await rename(Bun.argv[1], Bun.argv[2]);' "$STAGE" "$DEST"
 echo "Runtime installed and verified: $DEST."

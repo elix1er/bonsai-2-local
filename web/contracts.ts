@@ -2,6 +2,11 @@ import * as v from "valibot";
 
 const metricsSchema = v.optional(
   v.pipe(
+    v.unknown(),
+    v.check(
+      (value) =>
+        value !== null && typeof value === "object" && !Array.isArray(value),
+    ),
     v.record(v.string(), v.unknown()),
     v.transform((values) =>
       Object.fromEntries(
@@ -81,7 +86,14 @@ export const jobSchema = v.variant("state", [
 ]);
 export type JobResult = v.InferOutput<typeof jobSchema>;
 export const sessionSchema = v.object({
-  messages: v.array(messageSchema),
+  messages: v.array(
+    v.object({
+      ...messageSchema.entries,
+      // Older clients stored unvalidated metrics; retain the conversation without them.
+      timings: v.fallback(metricsSchema, undefined),
+      usage: v.fallback(metricsSchema, undefined),
+    }),
+  ),
   draft: v.string(),
   thinking: v.optional(v.boolean()),
   retryText: v.optional(v.string()),

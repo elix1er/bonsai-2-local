@@ -1,10 +1,82 @@
 import * as v from "valibot";
 import { requestSchema, type Session, type Chunk } from "../contracts.ts";
 import { test, afterEach, vi } from "vitest";
-afterEach(() => vi.restoreAllMocks());
 import assert from "node:assert/strict";
 import { contextUsage, requestChat } from "../chat.ts";
 import { clearSession, loadSession, saveSession } from "../session.ts";
+
+afterEach(() => vi.restoreAllMocks());
+
+test("legacy sessions survive invalid optional metrics without weakening history validation", () => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
+    removeItem: (key: string) => {
+      values.delete(key);
+    },
+  };
+  const messages = [
+    { role: "user", content: "hello" },
+    {
+      role: "assistant",
+      content: "answer",
+      thought: "thought",
+      finish: "stop",
+    },
+  ];
+  for (const metric of ["n/a", true, 42, null, [1, 2]]) {
+    values.set(
+      "bonsai-chat-v1",
+      JSON.stringify({
+        messages: [
+          messages[0],
+          {
+            ...messages[1],
+            timings: metric,
+            usage: { completion_tokens: 4, invalid: "n/a" },
+          },
+        ],
+        draft: "next",
+        thinking: true,
+        retryText: "retry",
+      }),
+    );
+    const saved = loadSession(storage);
+    assert.ok(saved);
+    assert.equal(saved.draft, "next");
+    assert.equal(saved.thinking, true);
+    assert.equal(saved.retryText, "retry");
+    assert.equal(saved.messages[1].content, "answer");
+    assert.equal(saved.messages[1].thought, "thought");
+    assert.equal(saved.messages[1].timings, undefined);
+    assert.deepEqual(saved.messages[1].usage, { completion_tokens: 4 });
+    values.set(
+      "bonsai-chat-v1",
+      JSON.stringify({
+        messages: [
+          messages[0],
+          { ...messages[1], timings: { predicted_n: 4 }, usage: metric },
+        ],
+        draft: "",
+      }),
+    );
+    assert.deepEqual(loadSession(storage)?.messages[1].timings, {
+      predicted_n: 4,
+    });
+    assert.equal(loadSession(storage)?.messages[1].usage, undefined);
+  }
+  values.set(
+    "bonsai-chat-v1",
+    JSON.stringify({
+      messages: [messages[0], { ...messages[1], content: 42, timings: "n/a" }],
+      draft: "",
+    }),
+  );
+  assert.equal(loadSession(storage), null);
+});
 
 test("context estimates reserve the chosen output allowance", () => {
   assert.equal(contextUsage([], false).total, 4096);

@@ -534,7 +534,7 @@ shortenButton.onclick = () => {
 };
 const presets = [
   "Explain how a computer remembers things, using a simple everyday analogy.",
-  "Help me write a small Python script. First ask me what I want it to do.",
+  "Help me write a small TypeScript script. First ask me what I want it to do.",
   "Help me think through an idea. Ask me one useful question to get started.",
 ];
 $(".suggestions")

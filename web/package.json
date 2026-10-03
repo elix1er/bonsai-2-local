@@ -9,8 +9,8 @@
     "build": "bun run typecheck && bun --bun vite build",
     "start": "bun server.ts",
     "test": "bun --bun vitest run && bun --bun playwright test",
-    "format": "prettier --write *.ts *.css *.html tests/*.ts",
-    "format:check": "prettier --check *.ts *.css *.html tests/*.ts"
+    "format": "prettier --write *.ts *.css *.html tests/*.ts ../scripts/*.ts",
+    "format:check": "prettier --check *.ts *.css *.html tests/*.ts ../scripts/*.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",

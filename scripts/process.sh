@@ -75,17 +75,7 @@ stop_service() {
 start_detached() {
     local log="$1"
     shift
-    PID="$(python3 - "$ROOT" "$log" "$@" <<'PYTHON'
-import pathlib
-import subprocess
-import sys
-root = pathlib.Path(sys.argv[1])
-with pathlib.Path(sys.argv[2]).open('w') as log:
-    process = subprocess.Popen(sys.argv[3:], cwd=root, stdin=subprocess.DEVNULL,
-                               stdout=log, stderr=log, start_new_session=True)
-print(process.pid)
-PYTHON
-)"
+    PID="$(bun "$ROOT/scripts/detach.ts" "$ROOT" "$log" "$@")"
 }
 
 publish_pid() {

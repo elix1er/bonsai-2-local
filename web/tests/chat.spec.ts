@@ -41,6 +41,14 @@ test("local streaming, continuation, copy actions, and sanitized Markdown", asyn
   page,
 }) => {
   const requests: v.InferOutput<typeof observedRequest>[] = [];
+  const injectedMarkdown =
+    ' second\n```js\nconst x = 1;\n```\n<img src=x onerror="window.bad=true">';
+  const control = await page.context().newPage();
+  await control.setContent(injectedMarkdown);
+  await expect
+    .poll(() => control.evaluate(() => Reflect.get(window, "bad")))
+    .toBe(true);
+  await control.close();
   await setup(page, (route) => {
     requests.push(v.parse(observedRequest, route.request().postDataJSON()));
     return route.fulfill({
@@ -48,9 +56,7 @@ test("local streaming, continuation, copy actions, and sanitized Markdown", asyn
       body:
         requests.length === 1
           ? stream("First", "length")
-          : stream(
-              ' second\n```js\nconst x = 1;\n```\n<img src=x onerror="Reflect.get(window, "bad")=true">',
-            ),
+          : stream(injectedMarkdown),
     });
   });
   await page.goto("/");
@@ -70,6 +76,7 @@ test("local streaming, continuation, copy actions, and sanitized Markdown", asyn
   await expect(page.getByRole("button", { name: "Copy answer" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Copy code" })).toBeVisible();
   expect(await page.evaluate(() => Reflect.get(window, "bad"))).toBeUndefined();
+  await expect(page.locator(".assistant .body [onerror]")).toHaveCount(0);
   await expect(page.locator(".stats")).toContainText("20.0 tok/s");
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.getByRole("button", { name: "Copy code" }).click();
