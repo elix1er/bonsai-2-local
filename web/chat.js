@@ -133,13 +133,15 @@ async function remoteReply(body, signal) {
     try {
       data = await response.json();
     } catch {
-      throw new Error(
-        `Request failed (${response.status}). Retry your message.`,
-      );
+      data = null;
     }
-    if (!response.ok)
-      throw new Error(
-        data.error?.message || `Request failed (${response.status})`,
+    if (!response.ok || !data)
+      throw Object.assign(
+        new Error(
+          data?.error?.message ||
+            `Request failed (${response.status}). Retry your message.`,
+        ),
+        { status: response.status },
       );
     return data;
   }
@@ -149,10 +151,19 @@ async function remoteReply(body, signal) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...body, id }),
     });
+    let failures = 0;
     while (true) {
-      const job = await json(`/api/chat/jobs/${id}`);
-      if (job.state === "done") return job.result;
-      if (job.state !== "pending")
+      let job;
+      try {
+        job = await json(`/api/chat/jobs/${id}`);
+        failures = 0;
+      } catch (error) {
+        const permanent =
+          error.status >= 400 && error.status < 500 && error.status !== 429;
+        if (signal?.aborted || permanent || ++failures >= 3) throw error;
+      }
+      if (job?.state === "done") return job.result;
+      if (job && job.state !== "pending")
         throw new Error(job.error?.message || "Remote generation failed.");
       await new Promise((resolve, reject) => {
         function abort() {

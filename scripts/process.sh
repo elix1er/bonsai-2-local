@@ -89,13 +89,22 @@ PYTHON
 }
 
 publish_pid() {
+    local started_command
+    started_command="$(ps -p "$PID" -o command= 2>/dev/null)" || started_command=''
     if ! echo "$PID" > "$PID_FILE"; then
         kill -TERM "$PID" 2>/dev/null || true
         for ((i=0; i<10; i++)); do
             if ! process_running; then break; fi
             sleep 1
         done
-        if ! process_running; then wait "$PID" 2>/dev/null || true; fi
+        if process_running; then
+            if [ -z "$started_command" ] || [ "$(ps -p "$PID" -o command= 2>/dev/null)" != "$started_command" ]; then
+                echo "PID $PID changed ownership; refusing forced cleanup." >&2
+                return 1
+            fi
+            kill -KILL "$PID" 2>/dev/null || true
+        fi
+        wait "$PID" 2>/dev/null || true
         echo "Could not record PID $PID; startup was cancelled. Inspect the process if it remains alive." >&2
         return 1
     fi

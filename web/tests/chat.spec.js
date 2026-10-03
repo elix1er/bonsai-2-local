@@ -369,3 +369,32 @@ test("New chat in one tab prevents an active second tab from restoring cleared t
   await expect(page.locator(".message")).toHaveCount(0);
   await expect(second.getByRole("textbox")).toHaveValue("");
 });
+
+test("Stop cancels a remote request before its start acknowledgement arrives", async ({
+  page,
+}) => {
+  await setup(page);
+  let pending;
+  let id;
+  let cancelled = false;
+  await page.route("**/api/chat/jobs", (route) => {
+    pending = route;
+    id = route.request().postDataJSON().id;
+  });
+  await page.route("**/api/chat/jobs/*", (route) => {
+    cancelled =
+      route.request().method() === "DELETE" &&
+      route.request().url().endsWith(id);
+    return route.fulfill({ status: 204 });
+  });
+  await page.goto("http://bonsai.test:5187");
+  await page.getByRole("textbox").fill("Cancel during startup");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect.poll(() => id).toBeTruthy();
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  await expect.poll(() => cancelled).toBe(true);
+  await expect(
+    page.getByRole("button", { name: "Retry message" }),
+  ).toBeVisible();
+  await pending.abort().catch(() => {});
+});

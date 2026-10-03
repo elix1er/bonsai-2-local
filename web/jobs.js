@@ -13,6 +13,7 @@ export function createJobs({
   modelPort,
   deadlineMs = 20 * 60_000,
   retentionMs = 10 * 60_000,
+  leaseMs = 3 * 60_000,
 }) {
   const jobs = new Map();
   /** Send short, uncached job status responses through the tunnel. */
@@ -47,12 +48,19 @@ export function createJobs({
                 throw new Error("The model reply is too large.");
               chunks.push(chunk);
             }
-            const result = JSON.parse(Buffer.concat(chunks).toString());
-            if (response.statusCode !== 200 || result.error)
+            let result;
+            try {
+              result = JSON.parse(Buffer.concat(chunks).toString());
+            } catch {
+              result = null;
+            }
+            if (response.statusCode !== 200 || result?.error)
               throw new Error(
-                result.error?.message ||
+                result?.error?.message ||
                   `Model request failed (${response.statusCode})`,
               );
+            if (!result)
+              throw new Error("The model returned an unreadable reply.");
             resolve(result);
           } catch (error) {
             upstream.destroy();
@@ -63,6 +71,20 @@ export function createJobs({
       upstream.on("error", reject);
       upstream.end(JSON.stringify({ ...body, stream: false }));
     });
+  }
+
+  /** Reclaim an unpolled reply only when another browser needs the model. */
+  function busy() {
+    for (const job of jobs.values()) {
+      if (job.state !== "pending") continue;
+      if (Date.now() - job.seen <= leaseMs) return true;
+      job.state = "error";
+      job.error = {
+        message: "The browser stopped checking this reply. Retry your message.",
+      };
+      job.controller.abort(new Error(job.error.message));
+    }
+    return false;
   }
 
   /** Start, inspect, or cancel a bounded in-memory remote reply. */
@@ -76,7 +98,7 @@ export function createJobs({
         send(res, 415, { error: { message: "Send JSON chat messages." } });
         return;
       }
-      if ([...jobs.values()].some((job) => job.state === "pending")) {
+      if (busy()) {
         send(res, 429, {
           error: {
             message:
@@ -110,7 +132,7 @@ export function createJobs({
         return;
       }
       // Recheck after reading the body: two uploads may arrive together.
-      if ([...jobs.values()].some((job) => job.state === "pending")) {
+      if (busy()) {
         send(res, 429, {
           error: { message: "A remote reply is already running." },
         });
@@ -129,7 +151,7 @@ export function createJobs({
         return;
       }
       const controller = new AbortController();
-      const job = { state: "pending", controller };
+      const job = { state: "pending", controller, seen: Date.now() };
       jobs.set(id, job);
       job.timer = setTimeout(
         () =>
@@ -174,6 +196,7 @@ export function createJobs({
       job.controller.abort();
       res.writeHead(204, { "Cache-Control": "no-store" }).end();
     } else if (req.method === "GET") {
+      job.seen = Date.now();
       send(res, 200, {
         state: job.state,
         result: job.result,

@@ -174,6 +174,7 @@ test("remote jobs acknowledge promptly, stay pollable, reject overlap, and cance
     await close(server);
     await close(model);
   });
+  /** Submit a fixture job while keeping live model services out of the test. */
   const post = () =>
     fetch(`${base}/api/chat/jobs`, {
       method: "POST",
@@ -236,6 +237,7 @@ test("remote jobs validate IDs, stop at their deadline, and expire completed sta
     await close(server);
     await close(model);
   });
+  /** Submit a fixture job while keeping live model services out of the test. */
   const post = (id) =>
     fetch(`${base}/api/chat/jobs`, {
       method: "POST",
@@ -260,4 +262,86 @@ test("remote jobs validate IDs, stop at their deadline, and expire completed sta
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.equal(status, 404);
+});
+
+test("remote jobs report the model status when its error body is not JSON", async (t) => {
+  const model = http.createServer((req, res) => {
+    req.resume();
+    res.writeHead(503).end("temporarily unavailable");
+  });
+  const server = createChatServer({ modelPort: await listen(model) });
+  const base = `http://127.0.0.1:${await listen(server)}`;
+  t.after(async () => {
+    await close(server);
+    await close(model);
+  });
+  const id = randomBytes(16).toString("hex");
+  await fetch(`${base}/api/chat/jobs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, messages: [{ role: "user", content: "hi" }] }),
+  });
+  let job;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    job = await (await fetch(`${base}/api/chat/jobs/${id}`)).json();
+    if (job.state === "error") break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(job.error.message, "Model request failed (503)");
+});
+
+test("an active poll renews a job lease and an abandoned job yields to a new request", async (t) => {
+  let now = 0;
+  t.mock.method(Date, "now", () => now);
+  let started;
+  const arrived = new Promise((resolve) => {
+    started = resolve;
+  });
+  let stopped;
+  const cancelled = new Promise((resolve) => {
+    stopped = resolve;
+  });
+  let calls = 0;
+  const model = http.createServer((req, res) => {
+    req.resume();
+    if (++calls === 1) {
+      res.on("close", stopped);
+      started();
+    }
+  });
+  const jobs = createJobs({ modelPort: await listen(model) });
+  const server = http.createServer((req, res) =>
+    jobs.handle(req, res, req.url),
+  );
+  const base = `http://127.0.0.1:${await listen(server)}`;
+  t.after(async () => {
+    jobs.close();
+    await close(server);
+    await close(model);
+  });
+  /** Submit a fixture job while keeping live model services out of the test. */
+  const post = (id) =>
+    fetch(`${base}/api/chat/jobs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, messages: [{ role: "user", content: "hi" }] }),
+    });
+  const first = randomBytes(16).toString("hex");
+  assert.equal((await post(first)).status, 202);
+  await arrived;
+  now = 179_000;
+  await fetch(`${base}/api/chat/jobs/${first}`);
+  now = 358_000;
+  assert.equal((await post(randomBytes(16).toString("hex"))).status, 429);
+  now = 539_000;
+  const second = randomBytes(16).toString("hex");
+  assert.equal((await post(second)).status, 202);
+  await cancelled;
+  const old = await (await fetch(`${base}/api/chat/jobs/${first}`)).json();
+  assert.equal(old.state, "error");
+  assert.match(old.error.message, /stopped checking/);
+  assert.equal(
+    (await (await fetch(`${base}/api/chat/jobs/${second}`)).json()).state,
+    "pending",
+  );
 });

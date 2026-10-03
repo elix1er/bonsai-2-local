@@ -177,3 +177,62 @@ test("DONE cancels an open reader rather than waiting forever for EOF", async (t
   await requestChat([], { stream: true, onChunk() {} });
   assert.equal(cancelled, true);
 });
+
+test("remote polling survives a network failure and a non-JSON gateway response", async (t) => {
+  let polls = 0;
+  let deleted = 0;
+  t.mock.method(globalThis, "fetch", async (_, options = {}) => {
+    if (options.method === "POST")
+      return Response.json(
+        { id: JSON.parse(options.body).id },
+        { status: 202 },
+      );
+    if (options.method === "DELETE") {
+      deleted++;
+      return new Response(null, { status: 204 });
+    }
+    polls++;
+    if (polls === 1) throw new TypeError("Network unavailable");
+    if (polls === 2)
+      return new Response("<h1>Bad gateway</h1>", { status: 502 });
+    return Response.json({
+      state: "done",
+      result: {
+        choices: [{ message: { content: "Recovered" }, finish_reason: "stop" }],
+      },
+    });
+  });
+  let content;
+  await requestChat([{ role: "user", content: "hi" }], {
+    stream: false,
+    onChunk: (chunk) => {
+      content = chunk.content;
+    },
+  });
+  assert.equal(content, "Recovered");
+  assert.equal(polls, 3);
+  assert.equal(deleted, 1);
+});
+
+test("remote polling stops on expiry and bounds consecutive gateway failures", async (t) => {
+  for (const status of [404, 502]) {
+    let polls = 0;
+    t.mock.method(globalThis, "fetch", async (_, options = {}) => {
+      if (options.method === "POST")
+        return Response.json({ id: JSON.parse(options.body).id });
+      if (options.method === "DELETE")
+        return new Response(null, { status: 204 });
+      polls++;
+      return new Response("unavailable", { status });
+    });
+    await assert.rejects(
+      requestChat([{ role: "user", content: "hi" }], {
+        stream: false,
+        onChunk() {},
+      }),
+      (error) => error.status === status,
+    );
+    assert.equal(polls, status === 404 ? 1 : 3);
+    t.mock.restoreAll();
+  }
+});

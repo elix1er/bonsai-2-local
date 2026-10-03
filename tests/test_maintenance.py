@@ -144,6 +144,23 @@ class ProcessControlTests(unittest.TestCase):
                     process.terminate()
                     process.wait()
 
+    def test_pid_publication_failure_reclaims_a_child_ignoring_term(self):
+        """Force cleanup only for the captured child when graceful startup cancellation fails."""
+        with tempfile.TemporaryDirectory() as directory:
+            blocked = Path(directory) / 'web.pid'
+            blocked.mkdir()
+            process = subprocess.Popen(['node', '-e', 'process.on("SIGTERM", () => {}); console.log("ready"); setInterval(() => {}, 1000)'], stdout=subprocess.PIPE, text=True)
+            try:
+                self.assertEqual(process.stdout.readline().strip(), 'ready')
+                result = subprocess.run(['bash', '-c', 'sleep() { return 0; }; source "$1"; PID="$2"; PID_FILE="$3"; publish_pid', 'fixture', str(ROOT / 'scripts/process.sh'), str(process.pid), str(blocked)], capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(process.wait(timeout=3), -9)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+                process.stdout.close()
+
     def test_shutdown_states(self):
         """Check zombies, delayed exit, and timeout without signaling live services."""
         for script, pidfile in [('stop-web.sh', 'web.pid'), ('stop-share.sh', 'tunnel.pid'), ('stop.sh', 'server.pid')]:
