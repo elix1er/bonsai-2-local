@@ -175,7 +175,7 @@ export async function downloadModel({
   if (!(await verifyFile(partial, modelSize, modelChecksum))) {
     await rm(partial, { force: true });
     throw new Error(
-      "Model modelChecksum verification failed; corrupted partial file removed.",
+      "Model checksum verification failed; corrupted partial file removed.",
     );
   }
   await rename(partial, target);
