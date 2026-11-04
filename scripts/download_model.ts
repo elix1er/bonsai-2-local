@@ -9,6 +9,22 @@ export const EXPECTED_SHA256 =
   "3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1";
 const MODEL_URL = `https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/6ed5e12bf84b7a63069882c91dd9e9218647d17b/${FILENAME}`;
 
+export const MODELS = {
+  bonsai: {
+    filename: FILENAME,
+    size: EXPECTED_SIZE,
+    sha256: EXPECTED_SHA256,
+    url: MODEL_URL,
+  },
+  abliterated: {
+    filename: "Huihui-Qwen3.8-27B-abliterated-Ternary-Bonsai-PQ2_0.gguf",
+    size: 7704693216,
+    sha256: "0de67be7b5256c20971f44e514d87ec7fa81ad4f8d8fcf151644009f74f3a5cf",
+    url: "https://huggingface.co/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF/resolve/main/Huihui-Qwen3.8-27B-abliterated-Ternary-Bonsai-PQ2_0.gguf",
+  },
+} as const;
+export type ModelName = keyof typeof MODELS;
+
 /** Accept weights only when their size and pinned checksum match. */
 export async function verifyFile(
   file: string,
@@ -24,14 +40,16 @@ export async function verifyFile(
 /** Stream disjoint ranges to disk, retry from written offsets, then publish verified weights. */
 export async function downloadModel({
   directory = fileURLToPath(new URL("../models/", import.meta.url)),
-  url = MODEL_URL,
-  size = EXPECTED_SIZE,
-  checksum = EXPECTED_SHA256,
+  model = "bonsai",
+  url,
+  size,
+  checksum,
   workers = 8,
   retryDelayMs = 2000,
   timeoutMs = 60000,
 }: {
   directory?: string;
+  model?: ModelName;
   url?: string;
   size?: number;
   checksum?: string;
@@ -39,10 +57,14 @@ export async function downloadModel({
   retryDelayMs?: number;
   timeoutMs?: number;
 } = {}): Promise<void> {
+  const selected = MODELS[model];
+  const modelUrl = url ?? selected.url;
+  const modelSize = size ?? selected.size;
+  const modelChecksum = checksum ?? selected.sha256;
   await mkdir(directory, { recursive: true });
-  const target = path.join(directory, FILENAME);
+  const target = path.join(directory, selected.filename);
   const partial = `${target}.part`;
-  if (await verifyFile(target, size, checksum)) {
+  if (await verifyFile(target, modelSize, modelChecksum)) {
     console.log(`Model already downloaded and verified: ${target}`);
     return;
   }
@@ -54,16 +76,16 @@ export async function downloadModel({
     const speed =
       bytes / 1024 ** 2 / Math.max(0.1, (performance.now() - started) / 1000);
     process.stdout.write(
-      `\rProgress: ${((bytes / size) * 100).toFixed(1)}% @ ${speed.toFixed(1)} MB/s`,
+      `\rProgress: ${((bytes / modelSize) * 100).toFixed(1)}% @ ${speed.toFixed(1)} MB/s`,
     );
   }, 1000);
-  const chunkSize = Math.ceil(size / workers);
+  const chunkSize = Math.ceil(modelSize / workers);
   const failed = new AbortController();
 
   /** Bound network inactivity and resume only bytes that have reached the file. */
   async function fetchRange(index: number): Promise<void> {
     let position = index * chunkSize;
-    const end = Math.min(size - 1, position + chunkSize - 1);
+    const end = Math.min(modelSize - 1, position + chunkSize - 1);
     for (let attempt = 0; position <= end && attempt < 5; attempt++) {
       if (failed.signal.aborted) throw failed.signal.reason;
       const controller = new AbortController();
@@ -73,7 +95,7 @@ export async function downloadModel({
       );
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
       try {
-        const source = new URL(url);
+        const source = new URL(modelUrl);
         source.searchParams.set("part", String(index));
         source.searchParams.set("attempt", String(attempt));
         const response = await fetch(source, {
@@ -83,7 +105,7 @@ export async function downloadModel({
         if (
           response.status !== 206 ||
           response.headers.get("content-range") !==
-            `bytes ${position}-${end}/${size}`
+            `bytes ${position}-${end}/${modelSize}`
         ) {
           await response.body?.cancel();
           throw new Error("Server did not return the requested byte range");
@@ -129,7 +151,7 @@ export async function downloadModel({
   }
   try {
     try {
-      await file.truncate(size);
+      await file.truncate(modelSize);
       const results = await Promise.allSettled(
         progress.map(async (_, index) => {
           try {
@@ -150,17 +172,24 @@ export async function downloadModel({
     await rm(partial, { force: true }).catch(() => {});
     throw failed.signal.aborted ? failed.signal.reason : error;
   }
-  if (!(await verifyFile(partial, size, checksum))) {
+  if (!(await verifyFile(partial, modelSize, modelChecksum))) {
     await rm(partial, { force: true });
     throw new Error(
-      "Model checksum verification failed; corrupted partial file removed.",
+      "Model modelChecksum verification failed; corrupted partial file removed.",
     );
   }
   await rename(partial, target);
   console.log(`\nModel successfully saved to ${target}`);
 }
-if (import.meta.main)
-  downloadModel().catch((error) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exitCode = 1;
-  });
+if (import.meta.main) {
+  const name = process.argv[2] ?? "bonsai";
+  if (!Object.hasOwn(MODELS, name)) {
+    console.error("Usage: bun scripts/download_model.ts [bonsai|abliterated]");
+    process.exitCode = 2;
+  } else {
+    downloadModel({ model: name as ModelName }).catch((error) => {
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = 1;
+    });
+  }
+}
