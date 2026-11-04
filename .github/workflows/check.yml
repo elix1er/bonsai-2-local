@@ -16,6 +16,13 @@ jobs:
         with:
           bun-version: '1.4.2'
       - run: sudo apt-get update && sudo apt-get install -y shellcheck lsof
+      - name: Resolve patched versions for review
+        working-directory: web
+        run: |
+          bun add --exact --ignore-scripts 'dompurify@~3.4.17'
+          bun add --dev --exact --ignore-scripts 'vite@~8.3.3'
+          bun update --ignore-scripts source-map-js
+          git diff -- package.json bun.lock
       - run: bun audit
         working-directory: web
       - run: bun install --cwd web --frozen-lockfile --ignore-scripts
