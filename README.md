@@ -18,6 +18,21 @@ Open [the chat](http://127.0.0.1:5173). Your conversation and draft stay in this
 
 Setup downloads the [6.71 GiB model](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf) and its matching [Prism runtime](https://github.com/PrismML-Eng/llama.cpp/releases/tag/prism-b10709-9a9394a). It verifies both downloads with SHA-256.
 
+## Abliterated variant (optional)
+
+The [Huihui Ternary Bonsai 27B PQ2_0](https://huggingface.co/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF) is a 7.7 GB abliterated variant of the same Qwen3.8/Bonsai model family. It fits in 36 GB unified memory and requires the Prism llama.cpp runtime. Its output quality and throughput have not been benchmarked here; this release is experimental.
+
+```sh
+./setup.sh abliterated
+./stop.sh             # Only if another model is currently running
+./start.sh abliterated
+./start-web.sh -d
+```
+
+The original model remains the default: use `./start.sh` to run it. Only one model runs at a time on port 8080; stop it before switching. The web chat and API keep the `bonsai-2-27b` alias for either variant, so existing clients continue to work.
+
+**GLM-5.3 is not supported on 36 GB Macs:** even its smallest GGUF weighs about 217 GB. The abliterated Bonsai model above is a practical *alternative*, not GLM-5.3.
+
 ## API
 
 ```sh
