@@ -1,4 +1,5 @@
-import { test } from "node:test";
+import { test, afterEach, vi, onTestFinished } from "vitest";
+afterEach(() => vi.restoreAllMocks());
 import assert from "node:assert/strict";
 import http from "node:http";
 import { randomBytes } from "node:crypto";
@@ -6,23 +7,28 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { once } from "node:events";
-import { createChatServer } from "../server.js";
-import { createJobs } from "../jobs.js";
+import { createChatServer } from "../server.ts";
+import { createJobs } from "../jobs.ts";
 
 /** Use an ephemeral localhost port so server fixtures cannot collide with live services. */
-async function listen(server) {
+async function listen(server: http.Server) {
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
-  return server.address().port;
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  return address.port;
 }
 
 /** Close pooled connections as well as the listener during fixture cleanup. */
-function close(server) {
+function close(server: http.Server) {
+  const closed = new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
   server.closeAllConnections();
-  return new Promise((resolve) => server.close(resolve));
+  return closed;
 }
 
-test("built assets and the two API routes work without exposing repository files", async (t) => {
+test("built assets and the two API routes work without exposing repository files", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "bonsai-web-"));
   await mkdir(path.join(root, "assets"));
   await writeFile(path.join(root, "index.html"), "<h1>chat</h1>");
@@ -43,24 +49,24 @@ test("built assets and the two API routes work without exposing repository files
   });
   const server = createChatServer({ root, modelPort: await listen(model) });
   const base = `http://127.0.0.1:${await listen(server)}`;
-  t.after(async () => {
+  onTestFinished(async () => {
     await close(server);
     await close(model);
     await rm(root, { recursive: true });
   });
   assert.equal(await (await fetch(base)).text(), "<h1>chat</h1>");
   const asset = await fetch(`${base}/assets/app.js`);
-  assert.match(asset.headers.get("cache-control"), /immutable/);
+  assert.match(asset.headers.get("cache-control") || "", /immutable/);
   assert.equal(await asset.text(), "app");
   assert.equal(
     (await fetch(base, { method: "HEAD" })).headers.get("content-length"),
     "13",
   );
   for (const url of [
-    "/server.js",
+    "/server.ts",
     "/api/v1/models",
     "/%2e%2e%2fREADME.md",
-    "/%00.js",
+    "/%00.ts",
   ]) {
     assert.equal(
       (await fetch(base + url)).status,
@@ -86,23 +92,21 @@ test("built assets and the two API routes work without exposing repository files
   assert.equal((await response.json()).choices[0].message.content, "ok");
 });
 
-test("offline model gets a useful JSON error", async (t) => {
+test("offline model gets a useful JSON error", async () => {
   const unavailable = http.createServer();
   const modelPort = await listen(unavailable);
   await close(unavailable);
   const server = createChatServer({ modelPort });
   const base = `http://127.0.0.1:${await listen(server)}`;
-  t.after(() => close(server));
+  onTestFinished(() => close(server));
   const response = await fetch(`${base}/api/health`);
   assert.equal(response.status, 502);
   assert.match((await response.json()).error.message, /Start the model/);
 });
 
-test("disconnecting a streaming client closes the model request", async (t) => {
-  let disconnected;
-  const stopped = new Promise((resolve) => {
-    disconnected = resolve;
-  });
+test("disconnecting a streaming client closes the model request", async () => {
+  const { promise: stopped, resolve: disconnected } =
+    Promise.withResolvers<void>();
   const model = http.createServer((req, res) => {
     req.resume();
     res.writeHead(200, { "Content-Type": "text/event-stream" });
@@ -111,7 +115,7 @@ test("disconnecting a streaming client closes the model request", async (t) => {
   });
   const server = createChatServer({ modelPort: await listen(model) });
   const base = `http://127.0.0.1:${await listen(server)}`;
-  t.after(async () => {
+  onTestFinished(async () => {
     await close(server);
     await close(model);
   });
@@ -122,6 +126,7 @@ test("disconnecting a streaming client closes the model request", async (t) => {
     headers: { "Content-Type": "application/json" },
     body: "{}",
   });
+  assert.ok(response.body);
   await response.body.getReader().read();
   controller.abort();
   await Promise.race([
@@ -136,21 +141,15 @@ test("disconnecting a streaming client closes the model request", async (t) => {
   ]);
 });
 
-test("remote jobs acknowledge promptly, stay pollable, reject overlap, and cancel model work", async (t) => {
-  let finish;
-  let disconnected;
-  let submitted;
+test("remote jobs acknowledge promptly, stay pollable, reject overlap, and cancel model work", async () => {
+  let finish: (() => void) | undefined;
   let call = 0;
-  let secondSubmitted;
-  const secondStarted = new Promise((resolve) => {
-    secondSubmitted = resolve;
-  });
-  const started = new Promise((resolve) => {
-    submitted = resolve;
-  });
-  const stopped = new Promise((resolve) => {
-    disconnected = resolve;
-  });
+  const { promise: secondStarted, resolve: secondSubmitted } =
+    Promise.withResolvers<void>();
+  const { promise: started, resolve: submitted } =
+    Promise.withResolvers<void>();
+  const { promise: stopped, resolve: disconnected } =
+    Promise.withResolvers<void>();
   const model = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -170,7 +169,7 @@ test("remote jobs acknowledge promptly, stay pollable, reject overlap, and cance
   });
   const server = createChatServer({ modelPort: await listen(model) });
   const base = `http://127.0.0.1:${await listen(server)}`;
-  t.after(async () => {
+  onTestFinished(async () => {
     await close(server);
     await close(model);
   });
@@ -192,6 +191,7 @@ test("remote jobs acknowledge promptly, stay pollable, reject overlap, and cance
   const url = `${base}/api/chat/jobs/${id}`;
   assert.equal((await (await fetch(url)).json()).state, "pending");
   assert.equal((await post()).status, 429);
+  assert.ok(finish);
   finish();
   let job;
   for (let attempt = 0; attempt < 20; attempt++) {
@@ -221,7 +221,7 @@ test("remote jobs acknowledge promptly, stay pollable, reject overlap, and cance
   ]);
 });
 
-test("remote jobs validate IDs, stop at their deadline, and expire completed state", async (t) => {
+test("remote jobs validate IDs, stop at their deadline, and expire completed state", async () => {
   const model = http.createServer((req) => req.resume());
   const jobs = createJobs({
     modelPort: await listen(model),
@@ -229,16 +229,16 @@ test("remote jobs validate IDs, stop at their deadline, and expire completed sta
     retentionMs: 1000,
   });
   const server = http.createServer((req, res) =>
-    jobs.handle(req, res, req.url),
+    jobs.handle(req, res, req.url || "/"),
   );
   const base = `http://127.0.0.1:${await listen(server)}`;
-  t.after(async () => {
+  onTestFinished(async () => {
     jobs.close();
     await close(server);
     await close(model);
   });
   /** Submit a fixture job while keeping live model services out of the test. */
-  const post = (id) =>
+  const post = (id: string) =>
     fetch(`${base}/api/chat/jobs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -264,14 +264,14 @@ test("remote jobs validate IDs, stop at their deadline, and expire completed sta
   assert.equal(status, 404);
 });
 
-test("remote jobs report the model status when its error body is not JSON", async (t) => {
+test("remote jobs report the model status when its error body is not JSON", async () => {
   const model = http.createServer((req, res) => {
     req.resume();
     res.writeHead(503).end("temporarily unavailable");
   });
   const server = createChatServer({ modelPort: await listen(model) });
   const base = `http://127.0.0.1:${await listen(server)}`;
-  t.after(async () => {
+  onTestFinished(async () => {
     await close(server);
     await close(model);
   });
@@ -290,17 +290,12 @@ test("remote jobs report the model status when its error body is not JSON", asyn
   assert.equal(job.error.message, "Model request failed (503)");
 });
 
-test("an active poll renews a job lease and an abandoned job yields to a new request", async (t) => {
+test("an active poll renews a job lease and an abandoned job yields to a new request", async () => {
   let now = 0;
-  t.mock.method(Date, "now", () => now);
-  let started;
-  const arrived = new Promise((resolve) => {
-    started = resolve;
-  });
-  let stopped;
-  const cancelled = new Promise((resolve) => {
-    stopped = resolve;
-  });
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  const { promise: arrived, resolve: started } = Promise.withResolvers<void>();
+  const { promise: cancelled, resolve: stopped } =
+    Promise.withResolvers<void>();
   let calls = 0;
   const model = http.createServer((req, res) => {
     req.resume();
@@ -311,16 +306,16 @@ test("an active poll renews a job lease and an abandoned job yields to a new req
   });
   const jobs = createJobs({ modelPort: await listen(model) });
   const server = http.createServer((req, res) =>
-    jobs.handle(req, res, req.url),
+    jobs.handle(req, res, req.url || "/"),
   );
   const base = `http://127.0.0.1:${await listen(server)}`;
-  t.after(async () => {
+  onTestFinished(async () => {
     jobs.close();
     await close(server);
     await close(model);
   });
   /** Submit a fixture job while keeping live model services out of the test. */
-  const post = (id) =>
+  const post = (id: string) =>
     fetch(`${base}/api/chat/jobs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

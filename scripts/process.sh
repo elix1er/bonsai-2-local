@@ -29,8 +29,8 @@ check_owner() {
     local command
     command="$(ps -p "$PID" -o command=)"
     case "$SERVICE:$command" in
-        "web:node $ROOT/web/server.js --port 5173" | \
-        "web:$(command -v node) $ROOT/web/server.js --port 5173" | \
+        "web:bun $ROOT/web/server.ts --port 5173" | \
+        "web:$(command -v bun) $ROOT/web/server.ts --port 5173" | \
         "server:$ROOT/runtime/bin/mac/llama-server "* | \
         "tunnel:$ROOT/bin/cloudflared tunnel "*) return 0;;
         *) echo "PID $PID belongs to another process; inspect $SERVICE.pid." >&2; exit 1;;
@@ -75,17 +75,7 @@ stop_service() {
 start_detached() {
     local log="$1"
     shift
-    PID="$(python3 - "$ROOT" "$log" "$@" <<'PYTHON'
-import pathlib
-import subprocess
-import sys
-root = pathlib.Path(sys.argv[1])
-with pathlib.Path(sys.argv[2]).open('w') as log:
-    process = subprocess.Popen(sys.argv[3:], cwd=root, stdin=subprocess.DEVNULL,
-                               stdout=log, stderr=log, start_new_session=True)
-print(process.pid)
-PYTHON
-)"
+    PID="$(bun "$ROOT/scripts/detach.ts" "$ROOT" "$log" "$@")"
 }
 
 publish_pid() {

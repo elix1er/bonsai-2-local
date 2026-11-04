@@ -1,12 +1,12 @@
 import http from "node:http";
-import { createJobs, isJobPath } from "./jobs.js";
+import { createJobs, isJobPath } from "./jobs.ts";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 
-const types = {
+const types: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -15,7 +15,7 @@ const types = {
 };
 
 /** Serve the built frontend and the narrowly allowed chat API on localhost. */
-export function createChatServer({
+export function createChatApp({
   root = fileURLToPath(new URL("./dist/", import.meta.url)),
   modelPort = 8080,
 } = {}) {
@@ -23,7 +23,11 @@ export function createChatServer({
   const jobs = createJobs({ modelPort });
 
   /** Proxy only the model routes used by chat, and cancel work when the client leaves. */
-  function proxy(req, res, pathname) {
+  function proxy(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    pathname: string,
+  ) {
     const expectedMethod = pathname === "/api/health" ? "GET" : "POST";
     if (req.method !== expectedMethod) {
       res.writeHead(405, { Allow: expectedMethod }).end();
@@ -48,7 +52,7 @@ export function createChatServer({
             : {},
       },
       (response) => {
-        res.writeHead(response.statusCode, {
+        res.writeHead(response.statusCode || 502, {
           "Content-Type":
             response.headers["content-type"] || "application/json",
           "Cache-Control": "no-store",
@@ -82,11 +86,14 @@ export function createChatServer({
     req.pipe(upstream);
   }
 
-  const server = http.createServer(async (req, res) => {
+  const handle = async (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ) => {
     let pathname;
     try {
       pathname = decodeURIComponent(
-        new URL(req.url, "http://localhost").pathname,
+        new URL(req.url || "/", "http://localhost").pathname,
       );
     } catch {
       res.writeHead(400).end();
@@ -108,7 +115,7 @@ export function createChatServer({
       proxy(req, res, pathname);
       return;
     }
-    if (!["GET", "HEAD"].includes(req.method)) {
+    if (!["GET", "HEAD"].includes(req.method || "")) {
       res.writeHead(405, { Allow: "GET, HEAD" }).end();
       return;
     }
@@ -139,10 +146,26 @@ export function createChatServer({
       else await pipeline(createReadStream(file), res);
     } catch (error) {
       if (res.headersSent) res.destroy();
-      else res.writeHead(error.code === "ENOENT" ? 404 : 500).end();
+      else
+        res
+          .writeHead(
+            error instanceof Error && "code" in error && error.code === "ENOENT"
+              ? 404
+              : 500,
+          )
+          .end();
     }
-  });
-  server.on("close", () => jobs.close());
+  };
+  return { handle, close: jobs.close };
+}
+
+/** Bind the shared request handler to a standalone HTTP server. */
+export function createChatServer(
+  options: Parameters<typeof createChatApp>[0] = {},
+) {
+  const app = createChatApp(options);
+  const server = http.createServer(app.handle);
+  server.on("close", app.close);
   server.requestTimeout = 300000;
   server.timeout = 0;
   return server;
@@ -157,7 +180,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.exitCode = 1;
   });
   server.listen(port, "127.0.0.1", () =>
-    console.log(`Bonsai chat: http://127.0.0.1:${server.address().port}`),
+    console.log(`Bonsai chat: http://127.0.0.1:${port}`),
   );
   for (const signal of ["SIGINT", "SIGTERM"])
     process.on(signal, () => {

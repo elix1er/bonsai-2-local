@@ -1,7 +1,22 @@
+import * as v from "valibot";
+import {
+  jobRequestSchema,
+  replySchema,
+  errorMessage,
+  type Reply,
+  type JobResult,
+} from "./contracts.ts";
+import type { IncomingMessage, ServerResponse } from "node:http";
+type Job = {
+  outcome: JobResult;
+  controller: AbortController;
+  seen: number;
+  timer?: ReturnType<typeof setTimeout>;
+};
 import http from "node:http";
 
 /** Match only the start route and opaque reply IDs shared by both servers. */
-export function isJobPath(pathname) {
+export function isJobPath(pathname: string) {
   return (
     pathname === "/api/chat/jobs" ||
     /^\/api\/chat\/jobs\/[a-f0-9]{32}$/.test(pathname)
@@ -14,10 +29,15 @@ export function createJobs({
   deadlineMs = 20 * 60_000,
   retentionMs = 10 * 60_000,
   leaseMs = 3 * 60_000,
+}: {
+  modelPort: number;
+  deadlineMs?: number;
+  retentionMs?: number;
+  leaseMs?: number;
 }) {
-  const jobs = new Map();
+  const jobs = new Map<string, Job>();
   /** Send short, uncached job status responses through the tunnel. */
-  const send = (res, status, body) => {
+  const send = (res: ServerResponse, status: number, body: unknown) => {
     res.writeHead(status, {
       "Content-Type": "application/json",
       "Cache-Control": "no-store",
@@ -27,8 +47,8 @@ export function createJobs({
   };
 
   /** Keep the model connection local and abortable while its completed JSON is pending. */
-  function generate(body, signal) {
-    return new Promise((resolve, reject) => {
+  function generate(body: object, signal: AbortSignal) {
+    return new Promise<Reply>((resolve, reject) => {
       const upstream = http.request(
         {
           hostname: "127.0.0.1",
@@ -50,7 +70,10 @@ export function createJobs({
             }
             let result;
             try {
-              result = JSON.parse(Buffer.concat(chunks).toString());
+              result = v.parse(
+                replySchema,
+                JSON.parse(Buffer.concat(chunks).toString()),
+              );
             } catch {
               result = null;
             }
@@ -76,19 +99,26 @@ export function createJobs({
   /** Reclaim an unpolled reply only when another browser needs the model. */
   function busy() {
     for (const job of jobs.values()) {
-      if (job.state !== "pending") continue;
+      if (job.outcome.state !== "pending") continue;
       if (Date.now() - job.seen <= leaseMs) return true;
-      job.state = "error";
-      job.error = {
-        message: "The browser stopped checking this reply. Retry your message.",
+      job.outcome = {
+        state: "error",
+        error: {
+          message:
+            "The browser stopped checking this reply. Retry your message.",
+        },
       };
-      job.controller.abort(new Error(job.error.message));
+      job.controller.abort(new Error(job.outcome.error.message));
     }
     return false;
   }
 
   /** Start, inspect, or cancel a bounded in-memory remote reply. */
-  async function handle(req, res, pathname) {
+  async function handle(
+    req: IncomingMessage,
+    res: ServerResponse,
+    pathname: string,
+  ) {
     if (pathname === "/api/chat/jobs") {
       if (req.method !== "POST") {
         res.writeHead(405, { Allow: "POST" }).end();
@@ -116,15 +146,10 @@ export function createJobs({
           if (bytes > 1024 * 1024) throw new Error("Request too large.");
           chunks.push(chunk);
         }
-        body = JSON.parse(Buffer.concat(chunks).toString());
-        if (
-          !body ||
-          !Array.isArray(body.messages) ||
-          !body.messages.length ||
-          typeof body.id !== "string" ||
-          !/^[a-f0-9]{32}$/.test(body.id)
-        )
-          throw new Error();
+        body = v.parse(
+          jobRequestSchema,
+          JSON.parse(Buffer.concat(chunks).toString()),
+        );
       } catch {
         send(res, 400, {
           error: { message: "Send a valid chat request under 1 MiB." },
@@ -139,7 +164,9 @@ export function createJobs({
         return;
       }
       while (jobs.size >= 16) {
-        const [oldest, job] = jobs.entries().next().value;
+        const entry = jobs.entries().next().value;
+        if (!entry) break;
+        const [oldest, job] = entry;
         clearTimeout(job.timer);
         jobs.delete(oldest);
       }
@@ -151,7 +178,11 @@ export function createJobs({
         return;
       }
       const controller = new AbortController();
-      const job = { state: "pending", controller, seen: Date.now() };
+      const job: Job = {
+        outcome: { state: "pending" },
+        controller,
+        seen: Date.now(),
+      };
       jobs.set(id, job);
       job.timer = setTimeout(
         () =>
@@ -162,13 +193,12 @@ export function createJobs({
       ).unref();
       generate(request, controller.signal)
         .then((result) => {
-          job.state = "done";
-          job.result = result;
+          job.outcome = { state: "done", result };
         })
         .catch((error) => {
-          job.state = "error";
-          job.error = {
-            message: controller.signal.reason?.message || error.message,
+          job.outcome = {
+            state: "error",
+            error: { message: errorMessage(controller.signal.reason ?? error) },
           };
         })
         .finally(() => {
@@ -197,11 +227,7 @@ export function createJobs({
       res.writeHead(204, { "Cache-Control": "no-store" }).end();
     } else if (req.method === "GET") {
       job.seen = Date.now();
-      send(res, 200, {
-        state: job.state,
-        result: job.result,
-        error: job.error,
-      });
+      send(res, 200, job.outcome);
     } else res.writeHead(405, { Allow: "GET, DELETE" }).end();
   }
 
