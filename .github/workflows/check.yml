@@ -16,6 +16,8 @@ jobs:
         with:
           bun-version: '1.4.2'
       - run: sudo apt-get update && sudo apt-get install -y shellcheck lsof
-      - run: bun install --cwd web --frozen-lockfile
+      - run: bun audit
+        working-directory: web
+      - run: bun install --cwd web --frozen-lockfile --ignore-scripts
       - run: cd web && bun --bun playwright install --with-deps chromium
       - run: ./check.sh
