@@ -1,0 +1,20 @@
+:root {
+  --radatz-midnight: #020824;
+  --radatz-navy: #08143d;
+  --radatz-blue: #0055ff;
+  --radatz-cyan: #00d4ff;
+  --radatz-ice: #dffbff;
+  --radatz-white: #f5fcff;
+  --radatz-ink: #07112b;
+  --radatz-muted: #a5b9d9;
+  --radatz-gradient: linear-gradient(135deg, #00d4ff, #0055ff);
+  --radatz-font-sans:
+    Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --radatz-font-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+  --radatz-radius-sm: 8px;
+  --radatz-radius-md: 16px;
+  --radatz-radius-lg: 24px;
+  --radatz-space-unit: 4px;
+  --radatz-glow: 0 0 48px rgb(0 85 255 / 24%);
+}

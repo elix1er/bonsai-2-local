@@ -1,3 +1,5 @@
+@import url("./radatz-tokens.css");
+
 :root {
   font-family: "Avenir Next", Avenir, sans-serif;
   color: #263d2d;
@@ -502,4 +504,125 @@ summary {
 }
 .body pre {
   margin-top: 6px;
+}
+
+/* Radatz Electric Blue, adapted for Bonsai's existing chat controls. */
+:root {
+  font-family: var(--radatz-font-sans);
+  color: var(--radatz-white);
+  background: var(--radatz-midnight);
+}
+body {
+  min-height: 100vh;
+  background: radial-gradient(
+    ellipse at 50% 10%,
+    #10275c 0%,
+    var(--radatz-midnight) 60%
+  );
+}
+header {
+  border-bottom: 1px solid #ffffff18;
+}
+.brand {
+  font-family: var(--radatz-font-sans);
+  font-weight: 700;
+  letter-spacing: -1px;
+}
+.edition,
+.intro,
+.footnote,
+.thinking,
+.speaker,
+details,
+.meta {
+  color: var(--radatz-muted);
+}
+.edition {
+  font-family: var(--radatz-font-mono);
+}
+.eyebrow {
+  color: var(--radatz-cyan);
+  font-family: var(--radatz-font-mono);
+}
+h1,
+.body h1,
+.body h2,
+.body h3 {
+  font-family: var(--radatz-font-sans);
+  font-weight: 650;
+}
+.quiet,
+.suggestions button {
+  background: #102454;
+  border: 1px solid #33518b;
+  color: var(--radatz-ice);
+  border-radius: var(--radatz-radius-sm);
+}
+.quiet:hover,
+.suggestions button:hover {
+  background: #193877;
+}
+#connection.online::before {
+  background: var(--radatz-cyan);
+  box-shadow: 0 0 10px var(--radatz-cyan);
+}
+.dock {
+  background: linear-gradient(transparent, var(--radatz-midnight) 16%);
+}
+form,
+.notice {
+  background: var(--radatz-navy);
+  border: 1px solid #33518b;
+  box-shadow: var(--radatz-glow);
+}
+textarea {
+  color: var(--radatz-white);
+}
+textarea::placeholder {
+  color: var(--radatz-muted);
+}
+.switch {
+  background: #475a7d;
+}
+.thinking input:checked + .switch,
+#send,
+.btn-continue {
+  background: var(--radatz-blue);
+}
+.btn-continue:hover {
+  background: #3478ff;
+}
+button:focus-visible,
+a:focus-visible,
+textarea:focus-visible,
+.thinking input:focus-visible + .switch {
+  outline-color: var(--radatz-cyan);
+}
+.user {
+  background: #11265a;
+  border: 1px solid #29477f;
+}
+.body a {
+  color: var(--radatz-cyan);
+}
+.body pre,
+.body :not(pre) > code {
+  background: #101f49;
+}
+.body code {
+  font-family: var(--radatz-font-mono);
+}
+.body blockquote {
+  border-color: var(--radatz-cyan);
+}
+.body th,
+.body td,
+.meta {
+  border-color: #33518b;
+}
+.notice {
+  color: var(--radatz-ice);
+}
+.error {
+  color: #ffb9a4;
 }
