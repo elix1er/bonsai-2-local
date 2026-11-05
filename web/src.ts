@@ -2,7 +2,7 @@ import { errorMessage, type Message, type ModelMessage } from "./contracts.ts";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import "./style.css";
-import treeUrl from "../assets/tree.svg";
+import treeUrl from "../assets/radatz-symbol.svg";
 import { CONTEXT_SIZE, contextUsage, requestChat } from "./chat.ts";
 import {
   loadSession,
@@ -16,11 +16,11 @@ const remote = !["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
 const idleText = remote ? "Hosted on a Mac" : "Only on this device";
 const readyText = remote ? "Connected to Bonsai" : "Local & ready";
 
-const tree = `<img src="${treeUrl}" alt="" />`;
+const tree = `<img src="${treeUrl}" alt="Radatz Consortium" />`;
 
 element("#app", HTMLElement).innerHTML = `
 <header>
-  <div class="brand">${tree}<span>bonsai<span class="edition">2 / local</span></span></div>
+  <div class="brand">${tree}<span>RADATZ<span class="edition">CONSORTIUM / LOCAL INTELLIGENCE</span></span></div>
   <div class="header-right">
     <span id="connection" role="status">Connecting</span>
     <button id="clear" class="quiet">New chat <span aria-hidden="true">↗</span></button>
@@ -29,9 +29,9 @@ element("#app", HTMLElement).innerHTML = `
 <main>
   <section id="welcome">
     <div class="tree">${tree}</div>
-    <p class="eyebrow">LOCAL CHAT WITH BONSAI 2</p>
-    <h1>What’s on your mind?</h1>
-    <p class="intro">${remote ? "Running on your friend’s Mac." : "Running right here, on your Mac."}</p>
+    <p class="eyebrow">PRIVATE BY DESIGN · BONSAI 27B</p>
+    <h1>A space for<br><em>clear thinking.</em></h1>
+    <p class="intro">${remote ? "Running on your friend’s Mac." : "Your ideas. Your model. Your Mac."}</p>
     <div class="suggestions">
       <button>Explain something simply</button>
       <button>Help me write some code</button>
@@ -48,7 +48,7 @@ element("#app", HTMLElement).innerHTML = `
   <p id="save-notice" class="notice" role="status" hidden></p>
   <form id="composer">
     <label class="sr-only" for="prompt">Message Bonsai</label>
-    <textarea id="prompt" rows="1" placeholder="Ask Bonsai anything…" required></textarea>
+    <textarea id="prompt" rows="1" placeholder="Where shall we begin?" required></textarea>
     <div class="composer-bottom">
       <label class="thinking">
         <input id="thinking" type="checkbox"/>
